@@ -29,8 +29,10 @@ extFilter
 - Запустить configure
 ```bash
 ./configure --with-dpdk_target=<target> --with-dpdk_home=<path_to_compiled_dpdk>
+```
 ```bash
 - Скомпилировать программу
+```
 ```bash
 make
 ```
