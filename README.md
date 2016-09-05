@@ -13,11 +13,11 @@ extFilter
 ----------
 Для сборки программы необходимы следующие библиотеки и программы:
 
-  Poco >= 1.6
-  nDPI = git dev (устанавливается автоматически)
-  PcapPlusPlus = git master (устанавливается автоматически)
-  DPDK = 16.07
-  git
+- Poco >= 1.6
+- nDPI = git dev (устанавливается автоматически)
+- PcapPlusPlus = git master (устанавливается автоматически)
+- DPDK = 16.07
+- git
 
 Сборка
 ------
@@ -30,9 +30,7 @@ extFilter
 ```bash
 ./configure --with-dpdk_target=<target> --with-dpdk_home=<path_to_compiled_dpdk>
 ```
-```bash
 - Скомпилировать программу
-```
 ```bash
 make
 ```
