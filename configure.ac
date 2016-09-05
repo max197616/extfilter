@@ -143,6 +143,32 @@ AC_ARG_WITH(
     [PPP_HOME="$withval"]
 )
 
+AC_ARG_WITH(
+    [dpdk_home],
+    AS_HELP_STRING(
+    	[--with-dpdk_home=DIR],
+    	    [Path to DPDK library]
+    ),
+    [DPDK_HOME="$withval"]
+)
+
+AC_ARG_WITH(
+    [dpdk_target],
+    AS_HELP_STRING(
+    	[--with-dpdk_target=target],
+    	    [DPDK target]
+    ),
+    [DPDK_TARGET="$withval"]
+)
+
+if test -z "$DPDK_TARGET"; then
+    AC_MSG_ERROR([dpdk_target must be set])
+fi
+
+if test -z "$DPDK_HOME"; then
+    AC_MSG_ERROR([dpdk_home must be set])
+fi
+
 dnl PcapPlusPlus checks...
 AC_MSG_CHECKING(for PcapPlusPlus $PPP_HOME)
 if test -d "$PPP_HOME" ; then :
@@ -169,31 +195,6 @@ else
     cd $PPP_HOME; ./configure-linux.sh --dpdk --dpdk-home $DPDK_HOME --dpdk-target $DPDK_TARGET; make; cd -
 fi
 
-AC_ARG_WITH(
-    [dpdk_home],
-    AS_HELP_STRING(
-    	[--with-dpdk_home=DIR],
-    	    [Path to DPDK library]
-    ),
-    [DPDK_HOME="$withval"]
-)
-
-AC_ARG_WITH(
-    [dpdk_target],
-    AS_HELP_STRING(
-    	[--with-dpdk_target=target],
-    	    [DPDK target]
-    ),
-    [DPDK_TARGET="$withval"]
-)
-
-if test -z "$DPDK_TARGET"; then
-    AC_MSG_ERROR([dpdk_target must be set])
-fi
-
-if test -z "$DPDK_HOME"; then
-    AC_MSG_ERROR([dpdk_home must be set])
-fi
 
 AC_SUBST(DPDK_LIB,$DPDK_HOME/$DPDK_TARGET/lib)
 AC_SUBST(PPP_LIB,$PPP_HOME/Dist)
