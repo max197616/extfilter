@@ -90,7 +90,7 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 	nDPIWrapper nw;
 	struct ndpi_flow_struct *flow=nw.get_flow();
 	uint32_t current_tickt = 0;
-	protocol = ndpi_detection_process_packet(extFilter::my_ndpi_struct, flow, ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getData()), (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()), current_tickt, nw.get_src(), nw.get_dst());
+	protocol = ndpi_detection_process_packet(extFilter::my_ndpi_struct, flow, ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getData()),ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getDataLen()), current_tickt, nw.get_src(), nw.get_dst());
 /*
 	if(tcp_dst_port == 80)
 	{
@@ -166,7 +166,7 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				if(found)
 				{
 					m_ThreadStats.matched_ssl++;
-					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", ssl_client, match.id, (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getSrcIpAddress().toString()),tcp_src_port,(parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDstIpAddress().toString()),tcp_dst_port);
+					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", ssl_client, match.id, src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
 					if (pcapWriter)
 						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 
@@ -250,7 +250,7 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				if(found)
 				{
 					m_ThreadStats.matched_domains++;
-					_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getSrcIpAddress().toString()), (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDstIpAddress().toString()));
+					_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, src_ip->toString(), dst_ip->toString());
 					if (pcapWriter)
 						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 					
@@ -317,7 +317,7 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				if(found)
 				{
 					m_ThreadStats.matched_urls++;
-					_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s",uri,match.id,(parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getSrcIpAddress().toString()),(parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDstIpAddress().toString()));
+					_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s", uri, match.id, src_ip->toString(), dst_ip->toString());
 					if (pcapWriter)
 						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 					if(m_WorkerConfig.http_redirect)
