@@ -99,7 +99,7 @@ void StatisticTask::OutStatistic()
 		gettimeofday(&begin_time, NULL);
 		if(stats.ip_packets && stats.total_bytes)
 			avg_pkt_size = (unsigned int)(stats.total_bytes/stats.ip_packets);
-		app.logger().information("Total seen packets: %" PRIu64 ", Total seen bytes: %" PRIu64 ", Average packet size: %" PRIu32 " bytes, Traffic throughput: %s pps", stats.ip_packets, stats.total_bytes, avg_pkt_size, formatPackets(t));
+		app.logger().information("Total seen packets: %" PRIu64 " (IPv4 packets: %" PRIu64 ", IPv6 packets: %" PRIu64 "), Total seen bytes: %" PRIu64 ", Average packet size: %" PRIu32 " bytes, Traffic throughput: %s pps", stats.ip_packets, stats.ipv4_packets, stats.ipv6_packets, stats.total_bytes, avg_pkt_size, formatPackets(t));
 		app.logger().information("Total matched by ip/port: %" PRIu64 ", Total matched by ssl: %" PRIu64 ", Total matched by ssl/ip: %" PRIu64 ", Total matched by domain: %" PRIu64 ", Total matched by url: %" PRIu64, stats.matched_ip_port, stats.matched_ssl, stats.matched_ssl_ip, stats.matched_domains, stats.matched_urls);
 		app.logger().information("Total redirected domains %" PRIu64 ", Total redirected urls: %" PRIu64 ", Total rst sended: %" PRIu64, stats.redirected_domains,stats.redirected_urls,stats.sended_rst);
 	}

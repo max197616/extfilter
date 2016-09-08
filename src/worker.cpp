@@ -36,6 +36,10 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 	}
 
 	m_ThreadStats.ip_packets++;
+	if(ip_version == 4)
+		m_ThreadStats.ipv4_packets++;
+	else
+		m_ThreadStats.ipv6_packets++;
 
 	pcpp::TcpLayer* tcpLayer = parsedPacket.getLayerOfType<pcpp::TcpLayer>();
 	if(!tcpLayer)

@@ -15,10 +15,12 @@ public:
 	uint64_t analyzed_packets;
 	uint64_t matched_domains;
 	uint64_t matched_urls;
+	uint64_t ipv4_packets;
+	uint64_t ipv6_packets;
 
-	ThreadStats() : redirected_domains(0), redirected_urls(0), sended_rst(0), ip_packets(0), total_bytes(0), matched_ssl(0), matched_ssl_ip(0), matched_ip_port(0),total_packets(0), analyzed_packets(0), matched_domains(0), matched_urls(0) {}
+	ThreadStats() : redirected_domains(0), redirected_urls(0), sended_rst(0), ip_packets(0), total_bytes(0), matched_ssl(0), matched_ssl_ip(0), matched_ip_port(0),total_packets(0), analyzed_packets(0), matched_domains(0), matched_urls(0), ipv4_packets(0), ipv6_packets(0) {}
 
-	void clear() { redirected_domains = 0; redirected_urls = 0; sended_rst = 0; ip_packets = 0; total_bytes = 0; matched_ssl = 0; matched_ssl_ip = 0; matched_ip_port = 0; total_packets = 0; analyzed_packets = 0; matched_domains = 0; matched_urls =0; }
+	void clear() { redirected_domains = 0; redirected_urls = 0; sended_rst = 0; ip_packets = 0; total_bytes = 0; matched_ssl = 0; matched_ssl_ip = 0; matched_ip_port = 0; total_packets = 0; analyzed_packets = 0; matched_domains = 0; matched_urls = 0; ipv4_packets = 0; ipv6_packets = 0; }
 
 
 };
