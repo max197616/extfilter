@@ -51,6 +51,31 @@ public:
 	**/
 	void loadHosts(std::string &fn,IPPortMap *ippm);
 
+	std::string &getSSLFile()
+	{
+		return _sslFile;
+	}
+
+	std::string &getDomainsFile()
+	{
+		return _domainsFile;
+	}
+
+	std::string &getURLsFile()
+	{
+		return _urlsFile;
+	}
+
+	std::string &getHostsFile()
+	{
+	    return _hostsFile;
+	}
+
+	std::string &getSSLIpsFile()
+	{
+		return _sslIpsFile;
+	}
+
 	pcpp::CoreMask _coreMaskToUse;
 	uint32_t _BufPoolSize = DEFAULT_MBUF_POOL_SIZE;
 	std::vector<int> _dpdkPortVec;

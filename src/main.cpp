@@ -20,6 +20,7 @@
 #include "qdpi.h"
 #include "sendertask.h"
 #include "statistictask.h"
+#include "reloadtask.h"
 
 struct ndpi_detection_module_struct* extFilter::my_ndpi_struct = NULL;
 u_int32_t extFilter::ndpi_size_flow_struct = 0;
@@ -311,6 +312,17 @@ void extFilter::printDPDKPorts(const std::string& name,const std::string& value)
 
 }
 
+namespace
+{
+	static void handleSignal(int sig)
+	{
+		Poco::Util::Application& app = Poco::Util::Application::instance();
+		app.logger().information("Got HUP signal - reload data");
+		ReloadTask::_event.set();
+	}
+}
+
+
 int extFilter::main(const ArgVec& args)
 {
 	if(!_helpRequested && !_listDPDKPorts)
@@ -325,17 +337,11 @@ int extFilter::main(const ArgVec& args)
 		ptr->clear();
 
 
-/*		struct sigaction handler;
+		struct sigaction handler;
 		handler.sa_handler = handleSignal;
 		handler.sa_flags   = 0;
 		sigemptyset(&handler.sa_mask);
 		sigaction(SIGHUP, &handler, NULL);
-		Poco::TaskManager tm;
-		tm.start(new NFQStatisticTask(_statistic_interval));
-		tm.start(new nfqThread(_config));
-		tm.start(new SenderTask(_sender_params));
-		tm.start(new ReloadTask(this));
-*/
 
 		// extract core vector from core mask
 		std::vector<pcpp::SystemCore> coresToUse;
@@ -385,7 +391,8 @@ int extFilter::main(const ArgVec& args)
 			if(!_domainsFile.empty())
 			{
 				workerConfigArr[i].atmDomains = new AhoCorasickPlus();
-				loadDomains(_domainsFile,workerConfigArr[i].atmDomains,&workerConfigArr[i].domainsMatchType);
+				workerConfigArr[i].domainsMatchType = new DomainsMatchType;
+				loadDomains(_domainsFile,workerConfigArr[i].atmDomains, workerConfigArr[i].domainsMatchType);
 				workerConfigArr[i].atmDomains->finalize();
 			}
 			if(!_sslIpsFile.empty() && _block_undetected_ssl)
@@ -397,7 +404,8 @@ int extFilter::main(const ArgVec& args)
 			if(!_sslFile.empty())
 			{
 				workerConfigArr[i].atmSSLDomains = new AhoCorasickPlus();
-				loadDomains(_sslFile, workerConfigArr[i].atmSSLDomains,&workerConfigArr[i].SSLdomainsMatchType);
+				workerConfigArr[i].SSLdomainsMatchType = new DomainsMatchType;
+				loadDomains(_sslFile, workerConfigArr[i].atmSSLDomains, workerConfigArr[i].SSLdomainsMatchType);
 				workerConfigArr[i].atmSSLDomains->finalize();
 			}
 			if(!_hostsFile.empty())
@@ -428,6 +436,7 @@ int extFilter::main(const ArgVec& args)
 			return Poco::Util::Application::EXIT_OK;
 		}
 		tm.start(new StatisticTask(_statistic_interval, workerThreadVec));
+		tm.start(new ReloadTask(this, workerThreadVec));
 		waitForTerminationRequest();
 		pcpp::DpdkDeviceList::getInstance().stopDpdkWorkerThreads();
 		tm.cancelAll();

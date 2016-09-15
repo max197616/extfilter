@@ -36,12 +36,13 @@ struct WorkerConfig
 	AhoCorasickPlus *atm;
 	Poco::FastMutex atmLock; // для загрузки url
 	AhoCorasickPlus *atmDomains;
-	DomainsMatchType domainsMatchType;
+	DomainsMatchType *domainsMatchType;
 	Poco::FastMutex atmDomainsLock; // для загрузки domains
 	AhoCorasickPlus *atmSSLDomains;
-	DomainsMatchType SSLdomainsMatchType;
+	DomainsMatchType *SSLdomainsMatchType;
 	Poco::FastMutex atmSSLDomainsLock; // для загрузки domains
 	Patricia *sslIPs; // ip addresses for blocking
+	Poco::FastMutex sslIPsLock;
 	IPPortMap *ipportMap;
 	Poco::FastMutex ipportMapLock;
 
@@ -51,7 +52,20 @@ struct WorkerConfig
 	bool http_redirect;
 	std::string PathToWritePackets;
 	enum ADD_P_TYPES add_p_type;
-	WorkerConfig() : CoreId(MAX_NUM_OF_CORES+1), atm(NULL), atmDomains(NULL), atmSSLDomains(NULL), sslIPs(NULL), ipportMap(NULL), match_url_exactly(false),lower_host(false),block_undetected_ssl(false),http_redirect(true),add_p_type(A_TYPE_NONE) { }
+	WorkerConfig() : CoreId(MAX_NUM_OF_CORES+1),
+		atm(NULL),
+		atmDomains(NULL),
+		domainsMatchType(NULL),
+		atmSSLDomains(NULL),
+		SSLdomainsMatchType(NULL),
+		sslIPs(NULL),
+		ipportMap(NULL),
+		match_url_exactly(false),
+		lower_host(false),
+		block_undetected_ssl(false),
+		http_redirect(true),
+		add_p_type(A_TYPE_NONE)
+	 { }
 };
 
 
@@ -90,6 +104,11 @@ public:
 	const ThreadStats& getStats()
 	{
 		return m_ThreadStats;
+	}
+
+	WorkerConfig& getConfig()
+	{
+		return m_WorkerConfig;
 	}
 
 };

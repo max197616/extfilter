@@ -152,9 +152,9 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 					{
 						if(match.pattern.length != host_len)
 						{
-							DomainsMatchType::Iterator it=m_WorkerConfig.SSLdomainsMatchType.find(match.id);
+							DomainsMatchType::Iterator it=m_WorkerConfig.SSLdomainsMatchType->find(match.id);
 							bool exact_match=false;
-							if(it != m_WorkerConfig.SSLdomainsMatchType.end())
+							if(it != m_WorkerConfig.SSLdomainsMatchType->end())
 								exact_match = it->second;
 							if(exact_match)
 								continue;
@@ -184,16 +184,21 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 			} else {
 				if(m_WorkerConfig.block_undetected_ssl)
 				{
-					if(m_WorkerConfig.sslIPs->try_search_exact_ip(*dst_ip.get()))
+					if(m_WorkerConfig.sslIPsLock.tryLock())
 					{
-						m_ThreadStats.matched_ssl_ip++;
-						_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-						m_ThreadStats.sended_rst++;
-						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
-						return true;
+						if(m_WorkerConfig.sslIPs->try_search_exact_ip(*dst_ip.get()))
+						{
+							m_WorkerConfig.sslIPsLock.unlock();
+							m_ThreadStats.matched_ssl_ip++;
+							_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
+							m_ThreadStats.sended_rst++;
+							std::string empty_str;
+							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
+							return true;
+						}
+						m_WorkerConfig.sslIPsLock.unlock();
+						return false;
 					}
-					return false;
 				}
 //				_logger.debug("No ssl client certificate found! Accept packet from %s:%d to %s:%d.",src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
 				return false;
@@ -236,9 +241,9 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 					{
 						if(match.pattern.length != host_len)
 						{
-							DomainsMatchType::Iterator it=m_WorkerConfig.domainsMatchType.find(match.id);
+							DomainsMatchType::Iterator it=m_WorkerConfig.domainsMatchType->find(match.id);
 							bool exact_match=false;
-							if(it != m_WorkerConfig.domainsMatchType.end())
+							if(it != m_WorkerConfig.domainsMatchType->end())
 								exact_match = it->second;
 							if(exact_match)
 								continue;
