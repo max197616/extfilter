@@ -22,7 +22,6 @@
 #include "statistictask.h"
 #include "reloadtask.h"
 
-struct ndpi_detection_module_struct* extFilter::my_ndpi_struct = NULL;
 u_int32_t extFilter::ndpi_size_flow_struct = 0;
 u_int32_t extFilter::ndpi_size_id_struct = 0;
 u_int32_t extFilter::current_ndpi_memory = 0;
@@ -176,20 +175,7 @@ void extFilter::initialize(Application& self)
 		logger().fatal("DPDK ports not specified!");
 		throw Poco::Exception("DPDK ports not specified!");
 	}
-	// todo... ????
-	
-	my_ndpi_struct = init_ndpi();
-
-	if (my_ndpi_struct == NULL)
-	{
-		logger().fatal("Can't initialize nDPI!");
-		throw Poco::Exception("Can't initialize nDPI!");
-	}
-
-	std::string _protocolsFile=config().getString("protocols","");
-	if(!_protocolsFile.empty())
-		ndpi_load_protocols_file(my_ndpi_struct, (char *)_protocolsFile.c_str());
-
+	_protocolsFile=config().getString("protocols","");
 	// Load sizes of main parsing structures
 	ndpi_size_id_struct   = ndpi_detection_get_sizeof_ndpi_id_struct();
 	ndpi_size_flow_struct = ndpi_detection_get_sizeof_ndpi_flow_struct();
@@ -418,6 +404,15 @@ int extFilter::main(const ArgVec& args)
 			workerConfigArr[i].lower_host = _lower_host;
 			workerConfigArr[i].http_redirect = _http_redirect;
 			workerConfigArr[i].add_p_type = _add_p_type;
+			workerConfigArr[i].ndpi_struct = init_ndpi();
+			if (!workerConfigArr[i].ndpi_struct)
+			{
+				logger().fatal("Can't initialize nDPI!");
+				return Poco::Util::Application::EXIT_CONFIG;
+			}
+			if(!_protocolsFile.empty())
+				ndpi_load_protocols_file(workerConfigArr[i].ndpi_struct, (char *)_protocolsFile.c_str());
+			
 			std::string workerName("WorkerThread " + std::to_string(i));
 			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i]);
 			workerThreadVec.push_back(newWorker);

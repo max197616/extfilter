@@ -12,6 +12,7 @@
 #include <Poco/Mutex.h>
 #include <Poco/HashMap.h>
 #include <Poco/Logger.h>
+#include <ndpi_api.h>
 #include "AhoCorasickPlus.h"
 #include "patr.h"
 #include "stats.h"
@@ -52,6 +53,7 @@ struct WorkerConfig
 	bool http_redirect;
 	std::string PathToWritePackets;
 	enum ADD_P_TYPES add_p_type;
+	struct ndpi_detection_module_struct *ndpi_struct;
 	WorkerConfig() : CoreId(MAX_NUM_OF_CORES+1),
 		atm(NULL),
 		atmDomains(NULL),
@@ -64,7 +66,8 @@ struct WorkerConfig
 		lower_host(false),
 		block_undetected_ssl(false),
 		http_redirect(true),
-		add_p_type(A_TYPE_NONE)
+		add_p_type(A_TYPE_NONE),
+		ndpi_struct(NULL)
 	 { }
 };
 

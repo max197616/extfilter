@@ -15,12 +15,17 @@
 #include "ndpiwrapper.h"
 #include "sendertask.h"
 
+//#define DEBUG_TIME
+
+#define COUNT_ONLY
+
 static pcpp::PcapFileWriterDevice* pcapWriter = NULL;
 
 bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 {
+#ifdef DEBUG_TIME
 	Poco::Stopwatch sw;
-
+#endif
 	m_ThreadStats.total_packets++;
 
 	int ip_version=0;
@@ -89,40 +94,31 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 	}
 
 	ndpi_protocol protocol;
+#ifdef DEBUG_TIME
 	sw.reset();
 	sw.start();
+#endif
 	nDPIWrapper nw;
 	struct ndpi_flow_struct *flow=nw.get_flow();
 	uint32_t current_tickt = 0;
-	protocol = ndpi_detection_process_packet(extFilter::my_ndpi_struct, flow, ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getData()),ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getDataLen()), current_tickt, nw.get_src(), nw.get_dst());
-/*
-	if(tcp_dst_port == 80)
-	{
-		std::stringstream sstream;
-		sstream << std::hex;
-		for(int i=0; i < (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()); i++)
-		{
-			sstream << "0x" << std::setw(2) << std::setfill('0') << (int) *(parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()+i) << ",";
-	    }
-	    _logger.debug("data: %s",sstream.str());
-	}*/
-
+	protocol = ndpi_detection_process_packet(m_WorkerConfig.ndpi_struct, flow, ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getData()),ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getDataLen()), current_tickt, nw.get_src(), nw.get_dst());
 
 	if(protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
 	{
 //		_logger.debug("Guessing protocol...");
-		protocol = ndpi_guess_undetected_protocol(extFilter::my_ndpi_struct,
+		protocol = ndpi_guess_undetected_protocol(m_WorkerConfig.ndpi_struct,
 		   IPPROTO_TCP, // TCP
 		   0,//ip
 		   tcp_src_port, // sport
 		   0,
 		   tcp_dst_port); // dport
 	}
-
+#ifdef DEBUG_TIME
 	sw.stop();
-/*	_logger.debug("nDPI protocol detection occupied %ld us",sw.elapsed());
-	_logger.debug("Protocol is %hu/%hu src port: %d dst port: %d",protocol.master_protocol,protocol.protocol,tcp_src_port,tcp_dst_port);
-*/
+	_logger.debug("nDPI protocol detection occupied %ld us",sw.elapsed());
+#endif
+//	_logger.debug("Protocol is %hu/%hu src port: %d dst port: %d",protocol.master_protocol,protocol.protocol,tcp_src_port,tcp_dst_port);
+
 
 	if(protocol.master_protocol == NDPI_PROTOCOL_SSL || protocol.protocol == NDPI_PROTOCOL_SSL || protocol.protocol == NDPI_PROTOCOL_TOR)
 	{
@@ -139,8 +135,10 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				// если не можем выставить lock, то нет смысла продолжать...
 				if(!m_WorkerConfig.atmSSLDomainsLock.tryLock())
 					return false;
+#ifdef DEBUG_TIME
 				sw.reset();
 				sw.start();
+#endif
 				if(m_WorkerConfig.lower_host)
 					std::transform(ssl_client.begin(), ssl_client.end(), ssl_client.begin(), ::tolower);
 				AhoCorasickPlus::Match match;
@@ -165,8 +163,10 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 					}
 				}
 				m_WorkerConfig.atmSSLDomainsLock.unlock();
+#ifdef DEBUG_TIME
 				sw.stop();
-//				_logger.debug("SSL Host seek occupied %ld us, host: %s",sw.elapsed(),ssl_client);
+				_logger.debug("SSL Host seek occupied %ld us, host: %s",sw.elapsed(),ssl_client);
+#endif
 				if(found)
 				{
 					m_ThreadStats.matched_ssl++;
@@ -229,9 +229,10 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				}
 				if(m_WorkerConfig.lower_host)
 					std::transform(host.begin(), host.end(), host.begin(), ::tolower);
+#ifdef DEBUG_TIME
 				sw.reset();
 				sw.start();
-
+#endif
 				AhoCorasickPlus::Match match;
 				bool found=false;
 				{
@@ -254,8 +255,10 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 					}
 				}
 				m_WorkerConfig.atmDomainsLock.unlock();
+#ifdef DEBUG_TIME
 				sw.stop();
-				//_logger.debug("Host %s seek occupied %ld us", host, sw.elapsed());
+				_logger.debug("Host %s seek occupied %ld us", host, sw.elapsed());
+#endif
 				if(found)
 				{
 					m_ThreadStats.matched_domains++;

@@ -19,21 +19,22 @@
 
 #include "qdpi.h"
 #include <stdlib.h>
-
+#include <rte_config.h>
+#include <rte_malloc.h>
 #include "main.h"
 
 
 static void *malloc_wrapper(unsigned long size)
 {
-	extFilter::current_ndpi_memory += size;
+/*	extFilter::current_ndpi_memory += size;
 	if(extFilter::current_ndpi_memory > extFilter::max_ndpi_memory)
-		extFilter::max_ndpi_memory = extFilter::current_ndpi_memory;
-	return calloc(1,size);
+		extFilter::max_ndpi_memory = extFilter::current_ndpi_memory;*/
+	return rte_zmalloc(NULL,size,RTE_CACHE_LINE_SIZE);
 }
 
 static void free_wrapper(void *freeable)
 {
-	free(freeable);
+	rte_free(freeable);
 }
 
 void debug_printf(u_int32_t protocol, void *id_struct, ndpi_log_level_t log_level, const char *format, ...) {
@@ -73,8 +74,8 @@ void debug_printf(u_int32_t protocol, void *id_struct, ndpi_log_level_t log_leve
 
 struct ndpi_detection_module_struct* init_ndpi()
 {
-/*	set_ndpi_malloc(malloc_wrapper);
-	set_ndpi_free(free_wrapper);*/
+	set_ndpi_malloc(malloc_wrapper);
+	set_ndpi_free(free_wrapper);
 	struct ndpi_detection_module_struct* my_ndpi_struct = ndpi_init_detection_module();
 
 	if (my_ndpi_struct == NULL) {
@@ -85,11 +86,11 @@ struct ndpi_detection_module_struct* init_ndpi()
 
 	NDPI_PROTOCOL_BITMASK all;
 
-/*	NDPI_BITMASK_ADD(all,NDPI_PROTOCOL_HTTP);
+	NDPI_BITMASK_ADD(all,NDPI_PROTOCOL_HTTP);
 	NDPI_BITMASK_ADD(all,NDPI_PROTOCOL_SSL);
-*/
+
 	// enable all protocols
-	NDPI_BITMASK_SET_ALL(all);
+//	NDPI_BITMASK_SET_ALL(all);
 	ndpi_set_protocol_detection_bitmask2(my_ndpi_struct, &all);
 
 	return my_ndpi_struct;

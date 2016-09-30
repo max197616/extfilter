@@ -176,8 +176,8 @@ if test -d "$PPP_HOME" ; then :
 else
     AC_MSG_RESULT(not found)
     AC_MSG_NOTICE(Getting PPP from git)
-    git clone -b master https://github.com/max197616/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; cd -
-#    git clone -b master https://github.com/seladb/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; cd -
+#    git clone -b master https://github.com/max197616/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; cd -
+    git clone -b master https://github.com/seladb/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; patch -p1 < ../ppp.patch; cd -
     AC_MSG_CHECKING(for PPP $PPP_HOME)
     if test -d "$PPP_HOME" ; then :
 	AC_MSG_RESULT(found in $PPP_HOME)
@@ -197,6 +197,7 @@ fi
 
 
 AC_SUBST(DPDK_LIB,$DPDK_HOME/$DPDK_TARGET/lib)
+AC_SUBST(DPDK_INCLUDE,$DPDK_HOME/$DPDK_TARGET/include)
 AC_SUBST(PPP_LIB,$PPP_HOME/Dist)
 AC_SUBST(PPP_HEADER,$PPP_LIB/header)
 

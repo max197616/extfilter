@@ -22,23 +22,25 @@
 
 #include "main.h"
 #include <ndpi_api.h>
+#include <rte_config.h>
+#include <rte_malloc.h>
 
 class nDPIWrapper
 {
 public:
 	nDPIWrapper()
 	{
-		src = (struct ndpi_id_struct*)calloc(1,extFilter::ndpi_size_id_struct);
-		dst = (struct ndpi_id_struct*)calloc(1,extFilter::ndpi_size_id_struct);
-		flow = (struct ndpi_flow_struct *)calloc(1,extFilter::ndpi_size_flow_struct);
+		src = (struct ndpi_id_struct*)rte_zmalloc(NULL,extFilter::ndpi_size_id_struct,RTE_CACHE_LINE_SIZE);
+		dst = (struct ndpi_id_struct*)rte_zmalloc(NULL,extFilter::ndpi_size_id_struct,RTE_CACHE_LINE_SIZE);
+		flow = (struct ndpi_flow_struct *)rte_zmalloc(NULL,extFilter::ndpi_size_flow_struct,RTE_CACHE_LINE_SIZE);
 	}
 	~nDPIWrapper()
 	{
 		ndpi_free_flow(flow);
 		if(src)
-			free(src);
+			rte_free(src);
 		if(dst)
-			free(dst);
+			rte_free(dst);
 	}
 
 	inline struct ndpi_flow_struct *get_flow()

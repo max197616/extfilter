@@ -81,63 +81,57 @@ static std::string formatPackets(float numPkts)
 void StatisticTask::OutStatistic()
 {
 	Poco::Util::Application& app = Poco::Util::Application::instance();
-	
+	struct timeval end;
+	gettimeofday(&end, NULL);
+	float traffic_throughput=0;
+	uint64_t ip_packets=0;
+	uint64_t ipv4_packets=0;
+	uint64_t ipv6_packets=0;
+	uint64_t bytes=0;
+	uint64_t matched_ip_port=0;
+	uint64_t matched_ssl=0;
+	uint64_t matched_ssl_ip=0;
+	uint64_t matched_domains=0;
+	uint64_t matched_urls=0;
+	uint64_t redirected_domains=0;
+	uint64_t redirected_urls=0;
+	uint64_t sended_rst=0;
 	for(std::vector<pcpp::DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 	{
+		int core=(int)(*it)->getCoreId();
 		app.logger().information("Thread on core %u statistics:", (*it)->getCoreId());
 		const ThreadStats &stats=(static_cast<WorkerThread*>(*it))->getStats();
 		unsigned int avg_pkt_size=0;
-		struct timeval end;
-		gettimeofday(&end, NULL);
 		uint64_t last_pkts=0;
-		std::map<int,uint64_t>::iterator it1=map_last_pkts.find((int)(*it)->getCoreId());
+		std::map<int,uint64_t>::iterator it1=map_last_pkts.find(core);
 		if(it1 != map_last_pkts.end())
 			last_pkts = it1->second;
 		uint64_t tot_usec = end.tv_sec*1000000 + end.tv_usec - (begin_time.tv_sec*1000000 + begin_time.tv_usec);
 		float t = (float)((stats.ip_packets-last_pkts)*1000000)/(float)tot_usec;
-		map_last_pkts[(int)(*it)->getCoreId()]=stats.ip_packets;
-		gettimeofday(&begin_time, NULL);
+		traffic_throughput += t;
+		map_last_pkts[core]=stats.ip_packets;
 		if(stats.ip_packets && stats.total_bytes)
 			avg_pkt_size = (unsigned int)(stats.total_bytes/stats.ip_packets);
+		ip_packets += stats.ip_packets;
+		ipv4_packets += stats.ipv4_packets;
+		ipv6_packets += stats.ipv6_packets;
+		bytes += stats.total_bytes;
+		matched_ip_port += stats.matched_ip_port;
+		matched_ssl += stats.matched_ssl;
+		matched_ssl_ip += stats.matched_ssl_ip;
+		matched_domains += stats.matched_domains;
+		matched_urls += stats.matched_urls;
+		redirected_domains += stats.redirected_domains;
+		redirected_urls += stats.redirected_urls;
+		sended_rst += stats.sended_rst;
 		app.logger().information("Total seen packets: %" PRIu64 " (IPv4 packets: %" PRIu64 ", IPv6 packets: %" PRIu64 "), Total seen bytes: %" PRIu64 ", Average packet size: %" PRIu32 " bytes, Traffic throughput: %s pps", stats.ip_packets, stats.ipv4_packets, stats.ipv6_packets, stats.total_bytes, avg_pkt_size, formatPackets(t));
 		app.logger().information("Total matched by ip/port: %" PRIu64 ", Total matched by ssl: %" PRIu64 ", Total matched by ssl/ip: %" PRIu64 ", Total matched by domain: %" PRIu64 ", Total matched by url: %" PRIu64, stats.matched_ip_port, stats.matched_ssl, stats.matched_ssl_ip, stats.matched_domains, stats.matched_urls);
 		app.logger().information("Total redirected domains %" PRIu64 ", Total redirected urls: %" PRIu64 ", Total rst sended: %" PRIu64, stats.redirected_domains,stats.redirected_urls,stats.sended_rst);
 	}
-/*	app.logger().information("nDPI memory (once): %s",formatBytes(sizeof(ndpi_detection_module_struct)));
-	app.logger().information("nDPI memory per flow: %s",formatBytes(nfqFilter::ndpi_size_flow_struct));
-	app.logger().information("nDPI current memory usage: %s",formatBytes(nfqFilter::current_ndpi_memory));
-	app.logger().information("nDPI maximum memory usage: %s",formatBytes(nfqFilter::max_ndpi_memory));
-
-	Poco::TaskManager *pOwner=getOwner();
-	if(pOwner)
-	{
-		Poco::TaskManager::TaskList tl=pOwner->taskList();
-		for(Poco::TaskManager::TaskList::iterator it=tl.begin(); it != tl.end(); it++)
-		{
-			std::string threadName=(*it)->name();
-			std::size_t found=threadName.find("nfqThread");
-			if(found != std::string::npos)
-			{
-				// статистика задачи...
-				struct threadStats stats;
-				Poco::AutoPtr<nfqThread> p=it->cast<nfqThread>();
-				p->getStats(stats);
-				unsigned int avg_pkt_size=0;
-				struct timeval end;
-				gettimeofday(&end, NULL);
-				uint64_t tot_usec = end.tv_sec*1000000 + end.tv_usec - (begin_time.tv_sec*1000000 + begin_time.tv_usec);
-				float t = (float)(stats.ip_packets*1000000)/(float)tot_usec;
-				if(stats.ip_packets && stats.total_bytes)
-					avg_pkt_size = (unsigned int)(stats.total_bytes/stats.ip_packets);
-
-				app.logger().information("Total seen packets: %" PRIu64 ", Total seen bytes: %" PRIu64 ", Average packet size: %" PRIu32 " bytes, Traffic throughput: %s pps", stats.ip_packets, stats.total_bytes, avg_pkt_size, formatPackets(t));
-				app.logger().information("Total matched by ip/port: %" PRIu64 ", Total matched by ssl: %" PRIu64 ", Total matched by ssl/ip: %" PRIu64, stats.matched_ip_port, stats.matched_ssl, stats.matched_ssl_ip);
-				app.logger().information("Total redirected domains %" PRIu64 ", Total redirected urls: %" PRIu64 ", Total marked ssl: %" PRIu64 ", Total marked hosts: %" PRIu64 ", Total rst sended: %" PRIu64, stats.redirected_domains,stats.redirected_urls,stats.marked_ssl,stats.marked_hosts,stats.sended_rst);
-			}
-			app.logger().debug("State of task %s is %d", (*it)->name(), (int)(*it)->state());
-		}
-	}*/
-	
+	gettimeofday(&begin_time, NULL);
+	app.logger().information("All threads seen packets: %" PRIu64 " (IPv4 packets: %" PRIu64 ", IPv6 packets: %" PRIu64 "), seen bytes: %" PRIu64 ", traffic throughtput: %s pps", ip_packets, ipv4_packets, ipv6_packets, bytes, formatPackets(traffic_throughput));
+	app.logger().information("All threads matched by ip/port: %" PRIu64 ", matched by ssl: %" PRIu64 ", matched by ssl/ip: %" PRIu64 ", matched by domain: %" PRIu64 ",  matched by url: %" PRIu64, matched_ip_port, matched_ssl, matched_ssl_ip, matched_domains, matched_urls);
+	app.logger().information("All threads redirected domains %" PRIu64 ", redirected urls: %" PRIu64 ", rst sended: %" PRIu64, redirected_domains, redirected_urls, sended_rst);
 }
 
 void StatisticTask::runTask()

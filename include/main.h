@@ -80,8 +80,6 @@ public:
 	uint32_t _BufPoolSize = DEFAULT_MBUF_POOL_SIZE;
 	std::vector<int> _dpdkPortVec;
 	
-	// nDPI structures
-	static struct ndpi_detection_module_struct* my_ndpi_struct;
 	static u_int32_t ndpi_size_flow_struct;
 	static u_int32_t ndpi_size_id_struct;
 	static u_int32_t current_ndpi_memory;
@@ -97,6 +95,7 @@ private:
 	std::string _sslIpsFile;
 	std::string _sslFile;
 	std::string _hostsFile;
+	std::string _protocolsFile;
 
 	bool _lower_host;
 	bool _match_url_exactly;
