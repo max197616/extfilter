@@ -85,13 +85,18 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 			unsigned short port=tcp_dst_port;
 			if (it_ip->second.size() == 0 || it_ip->second.find(port) != it_ip->second.end())
 			{
+				m_WorkerConfig.ipportMapLock.unlock();
 				m_ThreadStats.matched_ip_port++;
 				_logger.debug("Found record in ip:port list for the client %s:%d and server %s:%d",src_ip->toString(),dst_ip->toString(),tcp_src_port,tcp_dst_port);
+				std::string empty_str;
+				SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(),tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
+				m_ThreadStats.sended_rst++;
 				return true;
 			}
 		}
 		m_WorkerConfig.ipportMapLock.unlock();
 	}
+	
 
 	ndpi_protocol protocol;
 #ifdef DEBUG_TIME

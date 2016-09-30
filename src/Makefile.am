@@ -1,4 +1,4 @@
-AM_CPPFLAGS = -I$(top_srcdir)/$(PPP_HEADER) -I$(top_srcdir)/nDPI/src/include -I$(DPDK_INCLUDE)
+AM_CPPFLAGS = -I$(top_srcdir)/$(PPP_HEADER) -I$(top_srcdir)/nDPI/src/include -I$(DPDK_INCLUDE) -msse -msse2 -msse3
 LDADD =-lpcap -L$(top_srcdir)/$(PPP_LIB) -lPcap++ -lPacket++ -lCommon++ \
 -L $(DPDK_LIB)  -lrt -lm -ldl $(top_srcdir)/nDPI/src/lib/.libs/libndpi.a
 
