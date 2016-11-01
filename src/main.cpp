@@ -26,10 +26,6 @@
 #include "statistictask.h"
 #include "reloadtask.h"
 
-u_int32_t extFilter::ndpi_size_flow_struct = 0;
-u_int32_t extFilter::ndpi_size_id_struct = 0;
-u_int32_t extFilter::current_ndpi_memory = 0;
-u_int32_t extFilter::max_ndpi_memory = 0;
 
 static struct rte_ring *worker_ring;
 
@@ -141,7 +137,8 @@ void extFilter::initialize(Application& self)
 	_block_undetected_ssl=config().getBool("block_undetected_ssl", false);
 	_http_redirect=config().getBool("http_redirect", true);
 	_statistic_interval=config().getInt("statistic_interval", 0);
-	_nbRxQueues=config().getInt("rx_queues", 1);
+	_nbRxQueues = 1;
+//	_nbRxQueues=config().getInt("rx_queues", 1);
 	_BufPoolSize=config().getInt("mbuf_pool_size", DEFAULT_MBUF_POOL_SIZE);
 
 
@@ -189,32 +186,21 @@ void extFilter::initialize(Application& self)
 	_add_p_type=it->second;
 	logger().debug("URL additional info set to %s", add_p_type);
 
-	std::string dpdk_ports=config().getString("dpdk_ports","");
-	if(!dpdk_ports.empty())
+	int dpdk_port = config().getInt("dpdk_port", -1);
+	if(dpdk_port == -1)
 	{
-		Poco::StringTokenizer restTokenizer(dpdk_ports, ",");
-		for(Poco::StringTokenizer::Iterator itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
-		{
-			_dpdkPortVec.push_back(Poco::NumberParser::parse(*itr));
-		}
+		logger().fatal("DPDK port is not specified!");
+		throw Poco::Exception("DPDK port is not specified!");
 	}
+	_dpdkPortVec.push_back(dpdk_port);
 
-	if(_dpdkPortVec.empty())
-	{
-		logger().fatal("DPDK ports not specified!");
-		throw Poco::Exception("DPDK ports not specified!");
-	}
 	_protocolsFile=config().getString("protocols","");
-	// Load sizes of main parsing structures
-	ndpi_size_id_struct   = ndpi_detection_get_sizeof_ndpi_id_struct();
-	ndpi_size_flow_struct = ndpi_detection_get_sizeof_ndpi_flow_struct();
 
 	// removing DPDK master core from core mask because DPDK worker threads cannot run on master core
 	_coreMaskToUse = _coreMaskToUse & ~(pcpp::DpdkDeviceList::getInstance().getDpdkMasterCore().Mask);
 	
 	// init value...
 	_tsc_hz = rte_get_tsc_hz();
-
 
 }
 
@@ -243,7 +229,7 @@ void extFilter::defineOptions(Poco::Util::OptionSet& options)
 			.repeatable(false)
 			.argument("FILE"));
 	options.addOption(
-		Poco::Util::Option("dpdk-ports","d","A comma-separated list of the DPDK port numbers to receive packets from.")
+		Poco::Util::Option("dpdk-port","d","DPDK port to receive packets from.")
 			.required(false)
 			.repeatable(false)
 			.argument("PORT_1..."));
@@ -274,18 +260,11 @@ void extFilter::handleOption(const std::string& name,const std::string& value)
 	{
 		_BufPoolSize =  Poco::NumberParser::parse(value);
 	}
-	if(name == "dpdk-ports")
+	if(name == "dpdk-port")
 	{
-		Poco::StringTokenizer restTokenizer(value, ",");
-		for(Poco::StringTokenizer::Iterator itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
-		{
-			_dpdkPortVec.push_back(Poco::NumberParser::parse(*itr));
-		}
+		int dpdk_port = Poco::NumberParser::parse(value);
+		_dpdkPortVec.push_back(dpdk_port);
 	}
-/*	if(name == "threads")
-	{
-		_cmd_threadsNum = Poco::NumberParser::parse(value);
-	}*/
 }
 
 void extFilter::handleHelp(const std::string& name,const std::string& value)

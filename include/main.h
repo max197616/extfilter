@@ -85,11 +85,6 @@ public:
 	uint32_t _BufPoolSize = DEFAULT_MBUF_POOL_SIZE;
 	std::vector<int> _dpdkPortVec;
 	
-	static u_int32_t ndpi_size_flow_struct;
-	static u_int32_t ndpi_size_id_struct;
-	static u_int32_t current_ndpi_memory;
-	static u_int32_t max_ndpi_memory;
-
 private:
 	bool _helpRequested;
 	bool _listDPDKPorts;
