@@ -1,0 +1,147 @@
+#!/bin/sh
+
+
+stats=/var/run/extFilter_stat
+datadir=/var/run/extfilter-stat
+
+rawstats=`cat $stats`
+
+
+readers_stat=""
+workers_packets=""
+
+# names for reader(s)
+p_reader_received_packets="allreaders.received_packets"
+p_reader_enqueued_packets="allreaders.enqueued_packets"
+p_reader_missed_packets="allreaders.missed_packets"
+
+# names for workers
+p_allworkers_total_packets="allworkers.total_packets"
+p_allworkers_ip_packets="allworkers.ip_packets"
+p_allworkers_ipv4_packets="allworkers.ipv4_packets"
+p_allworkers_ipv6_packets="allworkers.ipv6_packets"
+p_allworkers_total_bytes="allworkers_total_bytes"
+
+p_allworkers_matched_ip_port="allworkers.matched_ip_port"
+p_allworkers_matched_ssl="allworkers.matched_ssl"
+p_allworkers_matched_ssl_ip="allworkers.matched_ssl_ip"
+p_allworkers_matched_domains="allworkers.matched_domains"
+p_allworkers_matched_ulrs="allworkers.matched_ulrs"
+
+
+p_allworkers_active_flows="allworkers.active_flows"
+p_allworkers_expired_flows="allworkers.expired_flows"
+
+
+# default values
+reader_received_packets=0
+reader_enqueued_packets=0
+reader_missed_packets=0
+
+allworkers_total_packets=0
+allworkers_ip_packets=0
+allworkers_ipv4_packets=0
+allworkers_ipv6_packets=0
+allworkers_total_bytes=0
+
+allworkers_matched_ip_port=0
+allworkers_matched_ssl=0
+allworkers_matched_ssl_ip=0
+allworkers_matched_domains=0
+allworkers_matched_ulrs=0
+
+allworkers_active_flows=0
+allworkers_expired_flows=0
+
+
+
+for str in $rawstats
+do
+
+wdata=`echo $str | cut -f 1 -d "="`
+howmuch=`echo $str | cut -f 2 -d "="`
+
+case $wdata in
+allworkers*)
+	case $wdata in
+		"$p_allworkers_total_packets")
+			allworkers_total_packets=$howmuch
+			;;
+		
+		"$p_allworkers_ip_packets")
+			allworkers_ip_packets=$howmuch
+			;;
+		
+		"$p_allworkers_ipv4_packets")
+			allworkers_ipv4_packets=$howmuch
+			;;
+		
+		
+		"$p_allworkers_matched_ip_port")
+			allworkers_matched_ip_port=$howmuch
+			;;
+		
+		"$p_allworkers_matched_ssl")
+			allworkers_matched_ssl=$howmuch
+			;;
+		
+		"$p_allworkers_matched_ssl_ip")
+			allworkers_matched_ssl_ip=$howmuch
+			;;
+			
+		"$p_allworkers_matched_domains")
+			allworkers_matched_domains=$howmuch
+			;;
+			
+		"$p_allworkers_matched_ulrs")
+			allworkers_matched_ulrs=$howmuch
+			;;
+	esac
+;;
+
+allreaders*)
+	case $wdata in
+		"$p_reader_received_packets")
+		reader_received_packets=$howmuch
+		;;
+	
+		"$p_reader_enqueued_packets")
+		reader_enqueued_packets=$howmuch
+		;;
+	
+		"$p_reader_missed_packets")
+		reader_missed_packets=$howmuch
+		;;
+	
+		*)
+		;;
+	esac
+;;
+
+*)
+;;
+
+esac
+
+
+done
+
+
+
+readers_stat=$p_reader_received_packets":"$reader_received_packets\
+" "$p_reader_enqueued_packets":"$reader_enqueued_packets\
+" "$p_reader_missed_packets":"$reader_missed_packets
+
+echo $readers_stat > $datadir/readers
+
+
+workers_packets=$p_allworkers_total_packets":"$allworkers_total_packets\
+" "$p_allworkers_ip_packets":"$allworkers_ip_packets\
+" "$p_allworkers_ipv4_packets":"$allworkers_ipv4_packets\
+" "$p_allworkers_matched_ip_port":"$allworkers_matched_ip_port\
+" "$p_allworkers_matched_ssl":"$allworkers_matched_ssl\
+" "$p_allworkers_matched_ssl_ip":"$allworkers_matched_ssl_ip\
+" "$p_allworkers_matched_domains":"$allworkers_matched_domains\
+" "$p_allworkers_matched_ulrs":"$allworkers_matched_ulrs
+
+echo $workers_packets > $datadir/workers
