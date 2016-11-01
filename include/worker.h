@@ -20,7 +20,6 @@
 #include "patr.h"
 #include "flow.h"
 #include "stats.h"
-#include "flowhash.h"
 
 
 
