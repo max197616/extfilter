@@ -7,6 +7,7 @@
 #include <rte_malloc.h>
 #include <rte_hash.h>
 #include <Poco/Logger.h>
+#include <Poco/Net/IPAddress.h>
 
 #define FLOW_HASH_ENTRIES (1024*1024) // default 1M. Must be power of 2.
 
