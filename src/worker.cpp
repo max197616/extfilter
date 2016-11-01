@@ -1,3 +1,5 @@
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <TcpLayer.h>
 #include <UdpLayer.h>
 #include <DnsLayer.h>
@@ -10,129 +12,348 @@
 #include <Poco/Net/IPAddress.h>
 #include <sstream>
 #include <iomanip>
+#include <rte_config.h>
+#include <rte_malloc.h>
+#include <rte_ring.h>
+#include <rte_ether.h>
+#include <rte_ip.h>
+#include <rte_tcp.h>
+#include <rte_udp.h>
+#include <rte_cycles.h>
+#include <rte_ip_frag.h>
+
 #include "worker.h"
 #include "main.h"
-#include "ndpiwrapper.h"
 #include "sendertask.h"
+#include "flow.h"
+#include "flowentry.h"
+#include "utils.h"
+#include <rte_hash.h>
+
+#define tcphdr(x)	((struct tcphdr *)(x))
 
 //#define DEBUG_TIME
 
-#define COUNT_ONLY
-
 static pcpp::PcapFileWriterDevice* pcapWriter = NULL;
 
-bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
+WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, struct rte_ring *iring, flowHash *fh) :
+		m_WorkerConfig(workerConfig), m_Stop(true), m_CoreId(MAX_NUM_OF_CORES+1),
+		_logger(Poco::Logger::get(name)),
+		ring(iring), m_FlowHash(fh)
 {
-#ifdef DEBUG_TIME
-	Poco::Stopwatch sw;
-#endif
-	m_ThreadStats.total_packets++;
+	ipv4_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+	ipv6_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+}
+
+WorkerThread::~WorkerThread()
+{
+	free(ipv4_flows);
+	free(ipv6_flows);
+}
+
+ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64_t timestamp)
+{
+	if(ip_version == 6)
+	{
+		struct ipv6_5tuple key;
+		struct ipv6_hdr *ipv6_header = (struct ipv6_hdr *) ip_header;
+		m_FlowHash->makeIPv6Key(ipv6_header,&key);
+		int32_t ret = rte_hash_lookup(m_FlowHash->getIPv6Hash(), &key);
+		if(ret >= 0)
+		{
+			return ipv6_flows[ret];
+		}
+		if(ret == -EINVAL)
+		{
+			_logger.error("Bad parameter in ipv6 hash lookup");
+			return NULL;
+		}
+		if(ret == -ENOENT)
+		{
+			struct ndpi_flow_info *newflow = (struct ndpi_flow_info *)calloc(1,sizeof(struct ndpi_flow_info));
+			if(newflow == NULL)
+			{
+				_logger.fatal("Not enought memory for the flow");
+				throw Poco::Exception("Not enought memory for the flow");
+			}
+			newflow->last_seen = timestamp;
+			newflow->ip_version = 6;
+			newflow->cli2srv_direction = true;
+			memcpy(&newflow->keys.ipv6_key, &key, sizeof(struct ipv6_5tuple));
+			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
+			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
+			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
+			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
+			{
+				_logger.fatal("Not enought memory for the flow");
+				throw Poco::Exception("Not enought memory for the flow");
+			}
+			ret = rte_hash_add_key(m_FlowHash->getIPv6Hash(), &key);
+			if(ret == -EINVAL)
+			{
+				free(newflow->src_id);
+				free(newflow->dst_id);
+				free(newflow->ndpi_flow);
+				delete newflow;
+				_logger.error("Bad parameters in hash add");
+				return NULL;
+			}
+			if(ret == -ENOSPC)
+			{
+				free(newflow->src_id);
+				free(newflow->dst_id);
+				free(newflow->ndpi_flow);
+				delete newflow;
+				_logger.error("There is no space in the ipv6 hash");
+				return NULL;
+			}
+			ipv6_flows[ret] = newflow;
+			m_ThreadStats.ndpi_ipv6_flows_count++;
+			m_ThreadStats.ndpi_flows_count++;
+			return newflow;
+		}
+		return NULL;
+	}
+	if(ip_version == 4)
+	{
+		struct ipv4_5tuple key;
+		struct ipv4_hdr *ipv4_header = (struct ipv4_hdr *) ip_header;
+		m_FlowHash->makeIPv4Key(ipv4_header,&key);
+		int32_t ret = rte_hash_lookup(m_FlowHash->getIPv4Hash(), &key);
+		if(ret >= 0)
+		{
+			return ipv4_flows[ret];
+		}
+		if(ret == -EINVAL)
+		{
+			_logger.error("Bad parameter in ipv4 hash lookup");
+			return NULL;
+		}
+		if(ret == -ENOENT)
+		{
+			struct ndpi_flow_info *newflow = (struct ndpi_flow_info *)calloc(1,sizeof(struct ndpi_flow_info));
+			if(newflow == NULL)
+			{
+				_logger.fatal("Not enought memory for the flow");
+				throw Poco::Exception("Not enought memory for the flow");
+			}
+			newflow->last_seen = timestamp;
+			newflow->ip_version = 4;
+			newflow->cli2srv_direction = true;
+			memcpy(&newflow->keys.ipv4_key, &key, sizeof(struct ipv4_5tuple));
+			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
+			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
+			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
+			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
+			{
+				_logger.fatal("Not enought memory for the flow");
+				throw Poco::Exception("Not enought memory for the flow");
+			}
+			ret = rte_hash_add_key(m_FlowHash->getIPv4Hash(), &key);
+			if(ret == -EINVAL)
+			{
+				free(newflow->src_id);
+				free(newflow->dst_id);
+				free(newflow->ndpi_flow);
+				delete newflow;
+				_logger.error("Bad parameters in hash add");
+				return NULL;
+			}
+			if(ret == -ENOSPC)
+			{
+				free(newflow->src_id);
+				free(newflow->dst_id);
+				free(newflow->ndpi_flow);
+				delete newflow;
+				_logger.error("There is no space in the ipv4 hash");
+				return NULL;
+			}
+			ipv4_flows[ret] = newflow;
+			m_ThreadStats.ndpi_ipv4_flows_count++;
+			m_ThreadStats.ndpi_flows_count++;
+			return newflow;
+		}
+		return NULL;
+	}
+	return NULL;
+}
+
+
+
+bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
+{
+	struct ether_hdr *eth_hdr;
+	uint16_t ether_type;
+	uint8_t *l3;
+	struct ipv4_hdr *ipv4_header;
+	struct ipv6_hdr *ipv6_header;
+	int size=rte_pktmbuf_pkt_len(m);
+
+	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	ether_type = rte_be_to_cpu_16(eth_hdr->ether_type);
+	l3 = (uint8_t *)eth_hdr + sizeof(struct ether_hdr);
 
 	int ip_version=0;
-	if(parsedPacket.isPacketOfType(pcpp::IPv4))
-		ip_version=4;
-	else if (parsedPacket.isPacketOfType(pcpp::IPv6))
-		ip_version=6;
-
-	if(!ip_version)
+	uint32_t ip_len;
+	int iphlen=0;
+	// определяем версию протокола
+	if (ether_type == ETHER_TYPE_IPv4)
 	{
-		//_logger.error("Unsupported IP protocol for packet:\n %s", parsedPacket.printToString());
+		ip_version = 4;
+		m_ThreadStats.ipv4_packets++;
+		ipv4_header = (struct ipv4_hdr *)l3;
+		ip_len=rte_be_to_cpu_16(ipv4_header->total_length);
+		iphlen = (ipv4_header->version_ihl & IPV4_HDR_IHL_MASK) * IPV4_IHL_MULTIPLIER; // ipv4
+		if(ip_len < 20)
+		{
+			m_ThreadStats.ipv4_short_packets++;
+			return false;
+		}
+		if(rte_ipv4_frag_pkt_is_fragmented(ipv4_header))
+		{
+			m_ThreadStats.ipv4_fragments++;
+			return false;
+		}
+	} else if (ether_type == ETHER_TYPE_IPv6)
+	{
+		ip_version=6;
+		m_ThreadStats.ipv6_packets++;
+		ipv6_header = (struct ipv6_hdr *)l3;
+		ip_len=rte_be_to_cpu_16(ipv6_header->payload_len) + sizeof(ipv6_hdr);
+		iphlen = sizeof(struct ipv6_hdr);
+		if(rte_ipv6_frag_get_ipv6_fragment_header(ipv6_header) != NULL)
+		{
+			m_ThreadStats.ipv6_fragments++;
+			return false;
+		}
+	} else {
+		//_logger.debug("Unsupported ethernet type %x", (int) ether_type);
 		return false;
 	}
 
 	m_ThreadStats.ip_packets++;
-	if(ip_version == 4)
-		m_ThreadStats.ipv4_packets++;
-	else
-		m_ThreadStats.ipv6_packets++;
 
-	pcpp::TcpLayer* tcpLayer = parsedPacket.getLayerOfType<pcpp::TcpLayer>();
-	if(!tcpLayer)
+	uint8_t ip_protocol=(ip_version == 4 ? ipv4_header->next_proto_id : ipv6_header->proto);
+
+	if(ip_protocol != IPPROTO_TCP)
 	{
-//		_logger.debug("Analyzing only TCP protocol, got packet:\n %s", parsedPacket.printToString());
+		//_logger.debug("Not TCP protocol");
 		return false;
 	}
 
+	m_ThreadStats.total_bytes += size;
 
-	if((tcpLayer->getDataLen()-tcpLayer->getHeaderLen()) == 0)
+	uint8_t *pkt_data_ptr = NULL;
+	struct tcphdr* tcph;
+
+	pkt_data_ptr = l3 + (ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr));
+
+	tcph = (struct tcphdr *) pkt_data_ptr;
+
+	// длина tcp заголовка
+	int tcphlen = tcphdr(l3+iphlen)->doff*4;
+
+	// общая длина всех заголовков
+	uint32_t hlen = iphlen + tcphlen;
+
+	// пропускаем пакет без данных
+	if(hlen == ip_len)
 	{
-//		_logger.debug("Skip packet without data:\n %s", parsedPacket.printToString());
 		return false;
 	}
-	
+
 	m_ThreadStats.analyzed_packets++;
-	m_ThreadStats.total_bytes += parsedPacket.getRawPacket()->getRawDataLen();
 
-	int tcp_src_port=ntohs(tcpLayer->getTcpHeader()->portSrc);
-	int tcp_dst_port=ntohs(tcpLayer->getTcpHeader()->portDst);
+	int tcp_src_port=rte_be_to_cpu_16(tcph->source);
+	int tcp_dst_port=rte_be_to_cpu_16(tcph->dest);
 
 	std::unique_ptr<Poco::Net::IPAddress> src_ip;
 	std::unique_ptr<Poco::Net::IPAddress> dst_ip;
 	if(ip_version == 4)
 	{
-		src_ip.reset(new Poco::Net::IPAddress((parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getSrcIpAddress().toInAddr()),sizeof(in_addr)));
-		dst_ip.reset(new Poco::Net::IPAddress((parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDstIpAddress().toInAddr()),sizeof(in_addr)));
+		src_ip.reset(new Poco::Net::IPAddress(&ipv4_header->src_addr,sizeof(in_addr)));
+		dst_ip.reset(new Poco::Net::IPAddress(&ipv4_header->dst_addr,sizeof(in_addr)));
 	} else {
-		src_ip.reset(new Poco::Net::IPAddress((parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getSrcIpAddress().toIn6Addr()),sizeof(in6_addr)));
-		dst_ip.reset(new Poco::Net::IPAddress((parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getDstIpAddress().toIn6Addr()),sizeof(in6_addr)));
+		src_ip.reset(new Poco::Net::IPAddress(&ipv6_header->src_addr,sizeof(in6_addr)));
+		dst_ip.reset(new Poco::Net::IPAddress(&ipv6_header->dst_addr,sizeof(in6_addr)));
 	}
+
 
 	if(m_WorkerConfig.ipportMap && m_WorkerConfig.ipportMapLock.tryLock())
 	{
-		IPPortMap::iterator it_ip=m_WorkerConfig.ipportMap->find(*dst_ip.get());
-		if(it_ip != m_WorkerConfig.ipportMap->end())
+	
+		if(m_WorkerConfig.ipPortMap->try_search_exact_ip(*dst_ip.get()))
 		{
-			unsigned short port=tcp_dst_port;
-			if (it_ip->second.size() == 0 || it_ip->second.find(port) != it_ip->second.end())
+
+			IPPortMap::iterator it_ip=m_WorkerConfig.ipportMap->find(*dst_ip.get());
+			if(it_ip != m_WorkerConfig.ipportMap->end())
 			{
-				m_WorkerConfig.ipportMapLock.unlock();
-				m_ThreadStats.matched_ip_port++;
-				_logger.debug("Found record in ip:port list for the client %s:%d and server %s:%d",src_ip->toString(),dst_ip->toString(),tcp_src_port,tcp_dst_port);
-				std::string empty_str;
-				SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(),tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
-				m_ThreadStats.sended_rst++;
-				return true;
+				unsigned short port=tcp_dst_port;
+				if (it_ip->second.size() == 0 || it_ip->second.find(port) != it_ip->second.end())
+				{
+					m_WorkerConfig.ipportMapLock.unlock();
+					m_ThreadStats.matched_ip_port++;
+					_logger.debug("Found record in ip:port list for the client %s:%d and server %s:%d",src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
+					std::string empty_str;
+					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(),/*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+					m_ThreadStats.sended_rst++;
+					return true;
+				}
 			}
 		}
 		m_WorkerConfig.ipportMapLock.unlock();
 	}
-	
+	/* setting time */
+	uint64_t packet_time = timestamp;
 
-	ndpi_protocol protocol;
-#ifdef DEBUG_TIME
-	sw.reset();
-	sw.start();
-#endif
-	nDPIWrapper nw;
-	struct ndpi_flow_struct *flow=nw.get_flow();
-	uint32_t current_tickt = 0;
-	protocol = ndpi_detection_process_packet(m_WorkerConfig.ndpi_struct, flow, ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getData()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getData()),ip_version == 4 ? (parsedPacket.getLayerOfType<pcpp::IPv4Layer>()->getDataLen()) : (parsedPacket.getLayerOfType<pcpp::IPv6Layer>()->getDataLen()), current_tickt, nw.get_src(), nw.get_dst());
+	ndpi_flow_info *flow_info = getFlow(l3, ip_version, timestamp);
 
-	if(protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
+	if(!flow_info)
 	{
-//		_logger.debug("Guessing protocol...");
-		protocol = ndpi_guess_undetected_protocol(m_WorkerConfig.ndpi_struct,
-		   IPPROTO_TCP, // TCP
-		   0,//ip
-		   tcp_src_port, // sport
-		   0,
-		   tcp_dst_port); // dport
+		_logger.fatal("Can't get flow info");
+		throw Poco::Exception("Can't get flow info");
+		return false;
 	}
-#ifdef DEBUG_TIME
-	sw.stop();
-	_logger.debug("nDPI protocol detection occupied %ld us",sw.elapsed());
-#endif
-//	_logger.debug("Protocol is %hu/%hu src port: %d dst port: %d",protocol.master_protocol,protocol.protocol,tcp_src_port,tcp_dst_port);
 
 
-	if(protocol.master_protocol == NDPI_PROTOCOL_SSL || protocol.protocol == NDPI_PROTOCOL_SSL || protocol.protocol == NDPI_PROTOCOL_TOR)
+	flow_info->last_seen = timestamp;
+
+	if(flow_info->detection_completed)
+		return false;
+
+	flow_info->detected_protocol = ndpi_detection_process_packet(m_WorkerConfig.ndpi_struct, flow_info->ndpi_flow,
+		l3,
+		ip_len,
+		packet_time, (struct ndpi_id_struct *) flow_info->src_id, (struct ndpi_id_struct *) flow_info->dst_id);
+
+	if(flow_info->detected_protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
 	{
-		if(m_WorkerConfig.atmSSLDomains && flow->l4.tcp.ssl_seen_client_cert == 1)
+		flow_info->detected_protocol = ndpi_detection_giveup(m_WorkerConfig.ndpi_struct, flow_info->ndpi_flow);
+	}
+
+	if(flow_info->detected_protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
+	{
+		flow_info->detected_protocol = ndpi_guess_undetected_protocol(m_WorkerConfig.ndpi_struct,
+			ip_protocol,
+			0,//ip
+			tcp_src_port, // sport
+			0,
+			tcp_dst_port); // dport
+	}
+
+	flow_info->bytes += ip_len;
+	flow_info->packets++;
+	if(flow_info->detected_protocol.protocol != NDPI_PROTOCOL_UNKNOWN)
+		flow_info->detection_completed = true;
+
+	if(flow_info->detected_protocol.master_protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_TOR)
+	{
+		if(m_WorkerConfig.atmSSLDomains && flow_info->ndpi_flow->l4.tcp.ssl_seen_client_cert == 1)
 		{
 			std::string ssl_client;
-			if(flow->protos.ssl.client_certificate[0] != '\0')
+			if(flow_info->ndpi_flow->protos.ssl.client_certificate[0] != '\0')
 			{
-				ssl_client=flow->protos.ssl.client_certificate;
+				ssl_client=flow_info->ndpi_flow->protos.ssl.client_certificate;
 //				_logger.debug("SSL client is: %s",ssl_client);
 			}
 			if(!ssl_client.empty())
@@ -176,50 +397,45 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				{
 					m_ThreadStats.matched_ssl++;
 					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", ssl_client, match.id, src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-					if (pcapWriter)
-						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
+//					if (pcapWriter)
+//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 
 					std::string empty_str;
-					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
+					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 					m_ThreadStats.sended_rst++;
 					return true;
 				} else {
 					return false;
 				}
-			} else {
-				if(m_WorkerConfig.block_undetected_ssl)
+			} else if(m_WorkerConfig.block_undetected_ssl)
+			{
+				if(m_WorkerConfig.sslIPsLock.tryLock())
 				{
-					if(m_WorkerConfig.sslIPsLock.tryLock())
+					if(m_WorkerConfig.sslIPs->try_search_exact_ip(*dst_ip.get()))
 					{
-						if(m_WorkerConfig.sslIPs->try_search_exact_ip(*dst_ip.get()))
-						{
-							m_WorkerConfig.sslIPsLock.unlock();
-							m_ThreadStats.matched_ssl_ip++;
-							_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-							m_ThreadStats.sended_rst++;
-							std::string empty_str;
-							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
-							return true;
-						}
 						m_WorkerConfig.sslIPsLock.unlock();
-						return false;
+						m_ThreadStats.matched_ssl_ip++;
+						_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
+						m_ThreadStats.sended_rst++;
+						std::string empty_str;
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+						return true;
 					}
+					m_WorkerConfig.sslIPsLock.unlock();
 				}
-//				_logger.debug("No ssl client certificate found! Accept packet from %s:%d to %s:%d.",src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-				return false;
 			}
 		}
 		return false;
 	}
 
 
-	if(protocol.master_protocol != NDPI_PROTOCOL_HTTP && protocol.protocol != NDPI_PROTOCOL_HTTP && protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
+	if(flow_info->detected_protocol.master_protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
 	{
 		return false;
 	}
 
-	std::string host((char *)&flow->host_server_name[0]);
-	if((flow->http.method == HTTP_METHOD_GET || flow->http.method == HTTP_METHOD_POST || flow->http.method == HTTP_METHOD_HEAD) && !host.empty())
+	std::string host((char *)&flow_info->ndpi_flow->host_server_name);
+	if((flow_info->ndpi_flow->http.method == HTTP_METHOD_GET || flow_info->ndpi_flow->http.method == HTTP_METHOD_POST || flow_info->ndpi_flow->http.method == HTTP_METHOD_HEAD) && !host.empty())
 	{
 		int dot_del=0;
 //		_logger.debug("Analyzing host %s", host);
@@ -268,8 +484,8 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				{
 					m_ThreadStats.matched_domains++;
 					_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, src_ip->toString(), dst_ip->toString());
-					if (pcapWriter)
-						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
+//					if (pcapWriter)
+//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 					
 					if(m_WorkerConfig.http_redirect)
 					{
@@ -282,22 +498,20 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq,/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
 						m_ThreadStats.redirected_domains++;
 					} else {
 						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 						m_ThreadStats.sended_rst++;
 					}
 					return true;
 				}
 			}
 		}
-		
-		std::string uri_o(flow->http.url ? flow->http.url : "");
+		std::string uri_o(flow_info->ndpi_flow->http.url ? flow_info->ndpi_flow->http.url : "");
 		if(m_WorkerConfig.atm && !uri_o.empty())
 		{
-//			_logger.debug("test url %s", uri_o);
 			if(m_WorkerConfig.atmLock.tryLock())
 			{
 				std::string uri;
@@ -335,8 +549,8 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 				{
 					m_ThreadStats.matched_urls++;
 					_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s", uri, match.id, src_ip->toString(), dst_ip->toString());
-					if (pcapWriter)
-						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
+//					if (pcapWriter)
+//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
 					if(m_WorkerConfig.http_redirect)
 					{
 						std::string add_param;
@@ -348,11 +562,11 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq,/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
 						m_ThreadStats.redirected_urls++;
 					} else {
 						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), tcpLayer->getTcpHeader()->ackNumber, tcpLayer->getTcpHeader()->sequenceNumber, (tcpLayer->getTcpHeader()->pshFlag ? 1 : 0 ),empty_str,true));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 						m_ThreadStats.sended_rst++;
 					}
 					return true;
@@ -364,16 +578,17 @@ bool WorkerThread::analyzePacket(pcpp::Packet &parsedPacket)
 }
 
 
+
 bool WorkerThread::run(uint32_t coreId)
 {
 	m_CoreId = coreId;
 	m_Stop = false;
+	uint16_t result;
+	struct rte_mbuf* mBufArray[EXTFILTER_WORKER_BURST_SIZE];
 
-	// if no DPDK devices were assigned to this worker/core don't enter the main loop and exit
-	if (m_WorkerConfig.InDataCfg.size() == 0)
-	{
-		return true;
-	}
+	const uint64_t timeout = FLOW_IDLE_TIME * rte_get_timer_hz();
+
+	const uint64_t gc_int_tsc = (extFilter::getTscHz() + US_PER_S - 1) / US_PER_S * EXTF_GC_INTERVAL;
 
 	if (!m_WorkerConfig.PathToWritePackets.empty())
 	{
@@ -383,32 +598,75 @@ bool WorkerThread::run(uint32_t coreId)
 			_logger.error("Couldn't open pcap writer device");
 		}
 	}
+	uint64_t cur_tsc,diff_gc_tsc;
+	uint64_t prev_gc_tsc=0;
+	_logger.debug("Starting working thread on core %u", coreId);
+	_logger.debug("Running gc clean every %" PRIu64 " cycles. Cycles per second %" PRIu64, gc_int_tsc, rte_get_timer_hz());
 
+	int32_t iter_flows = 0;
 	// main loop, runs until be told to stop
 	while (!m_Stop)
 	{
-		// go over all DPDK devices configured for this worker/core
-		for (InputDataConfig::iterator iter = m_WorkerConfig.InDataCfg.begin(); iter != m_WorkerConfig.InDataCfg.end(); iter++)
-		{
-			// for each DPDK device go over all RX queues configured for this worker/core
-			for (std::vector<int>::iterator iter2 = iter->second.begin(); iter2 != iter->second.end(); iter2++)
-			{
-				pcpp::DpdkDevice* dev = iter->first;
-				pcpp::MBufRawPacket* packetArr = NULL;
-				int packetArrLen = 0;
-				// receive packets from network on the specified DPDK device and RX queue
-				if (!dev->receivePackets(&packetArr, packetArrLen, *iter2))
-				{
-					_logger.error("Couldn't receive packet from DpdkDevice #%d, RX queue #%d", dev->getDeviceId(), *iter2);
-				}
+		cur_tsc = rte_rdtsc();
+		result = rte_ring_dequeue_burst(ring, (void **)mBufArray, EXTFILTER_WORKER_BURST_SIZE);
+		if (unlikely(result == 0))
+			continue;
+		last_time = cur_tsc;
 
-				for (int i = 0; i < packetArrLen; i++)
+		for (uint16_t j = 0; j < result; j++)
+		{
+			rte_prefetch0(rte_pktmbuf_mtod(mBufArray[j], void *));
+		}
+
+		// count received packets
+		m_ThreadStats.total_packets += result;
+		for (int i = 0; i < result; i++)
+		{
+			analyzePacket(mBufArray[i], last_time);
+			rte_pktmbuf_free(mBufArray[i]);
+		}
+
+		diff_gc_tsc = cur_tsc - prev_gc_tsc;
+		if (unlikely(diff_gc_tsc >= gc_int_tsc))
+		{
+			int z=0;
+			while(z < EXTF_GC_BUDGET)
+			{
+				if(ipv4_flows[iter_flows] && ((ipv4_flows[iter_flows]->last_seen+timeout) < cur_tsc))
 				{
-					pcpp::Packet parsedPacket(&packetArr[i]);
-					analyzePacket(parsedPacket);
+					int32_t delr=rte_hash_del_key(m_FlowHash->getIPv4Hash(), &ipv4_flows[iter_flows]->keys.ipv4_key);
+					if(delr < 0)
+					{
+						_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
+					} else {
+						ipv4_flows[iter_flows]->free_mem();
+						delete ipv4_flows[iter_flows];
+						ipv4_flows[iter_flows] = nullptr;
+						m_ThreadStats.ndpi_flows_count--;
+						m_ThreadStats.ndpi_ipv4_flows_count--;
+						m_ThreadStats.ndpi_flows_deleted++;
+					}
 				}
-				delete [] packetArr;
+				if(ipv6_flows[iter_flows] && ((ipv6_flows[iter_flows]->last_seen+timeout) < cur_tsc))
+				{
+					int32_t delr=rte_hash_del_key(m_FlowHash->getIPv6Hash(), &ipv6_flows[iter_flows]->keys.ipv6_key);
+					if(delr < 0)
+					{
+						_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
+					} else {
+						ipv6_flows[iter_flows]->free_mem();
+						delete ipv6_flows[iter_flows];
+						ipv6_flows[iter_flows] = nullptr;
+						m_ThreadStats.ndpi_flows_count--;
+						m_ThreadStats.ndpi_ipv6_flows_count--;
+						m_ThreadStats.ndpi_flows_deleted++;
+					}
+				}
+				z++;
+				iter_flows++;
 			}
+			iter_flows &= (FLOW_HASH_ENTRIES-1);
+			prev_gc_tsc = cur_tsc;
 		}
 	}
 	if (pcapWriter != NULL)

@@ -21,22 +21,28 @@
 #include <stdlib.h>
 #include <rte_config.h>
 #include <rte_malloc.h>
-#include "main.h"
 
+//#define _USE_RTE_MEM
 
 static void *malloc_wrapper(unsigned long size)
 {
-/*	extFilter::current_ndpi_memory += size;
-	if(extFilter::current_ndpi_memory > extFilter::max_ndpi_memory)
-		extFilter::max_ndpi_memory = extFilter::current_ndpi_memory;*/
+#ifdef _USE_RTE_MEM
 	return rte_zmalloc(NULL,size,RTE_CACHE_LINE_SIZE);
+#else
+	return calloc(1,size);
+#endif
 }
 
 static void free_wrapper(void *freeable)
 {
+#ifdef _USE_RTE_MEM
 	rte_free(freeable);
+#else
+	free(freeable);
+#endif
 }
 
+#if 0
 void debug_printf(u_int32_t protocol, void *id_struct, ndpi_log_level_t log_level, const char *format, ...) {
     va_list va_ap;
     struct tm result;
@@ -71,6 +77,7 @@ void debug_printf(u_int32_t protocol, void *id_struct, ndpi_log_level_t log_leve
 
     va_end(va_ap);
 }
+#endif
 
 struct ndpi_detection_module_struct* init_ndpi()
 {
@@ -82,7 +89,7 @@ struct ndpi_detection_module_struct* init_ndpi()
 		return NULL;
 	}
 
-//	my_ndpi_struct->http_dont_dissect_response=1;
+	my_ndpi_struct->http_dont_dissect_response = 0;
 
 	NDPI_PROTOCOL_BITMASK all;
 

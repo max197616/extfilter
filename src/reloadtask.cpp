@@ -17,6 +17,7 @@
 *
 */
 
+#include "dtypes.h"
 #include "reloadtask.h"
 #include "main.h"
 #include "AhoCorasickPlus.h"
@@ -125,15 +126,20 @@ void ReloadTask::runTask()
 				if(!_parent->getHostsFile().empty())
 				{
 					IPPortMap *ip_port_map = new IPPortMap;
+					Patricia *newp = new Patricia();
 					try
 					{
 						IPPortMap *old;
-						_parent->loadHosts(_parent->getHostsFile(),ip_port_map);
+						Patricia *old_p;
+						_parent->loadHosts(_parent->getHostsFile(),ip_port_map,newp);
 						config.ipportMapLock.lock();
 						old = config.ipportMap;
+						old_p = config.ipPortMap;
 						config.ipportMap = ip_port_map;
+						config.ipPortMap = newp;
 						config.ipportMapLock.unlock();
 						delete old;
+						delete old_p;
 						_logger.information("Reloaded data for ip port list for core %u", (*it)->getCoreId());
 					} catch (Poco::Exception &excep)
 					{

@@ -1,5 +1,3 @@
-#include "main.h"
-#include "worker.h"
 #include <Poco/Util/Option.h>
 #include <Poco/Util/OptionSet.h>
 #include <Poco/Util/HelpFormatter.h>
@@ -11,9 +9,15 @@
 #include <DpdkDeviceList.h>
 #include <DnsLayer.h>
 #include <SSLLayer.h>
+#include <rte_config.h>
+#include <rte_malloc.h>
+#include <rte_ring.h>
+#include <rte_cycles.h>
 
 #include <iostream>
 #include <vector>
+#include "worker.h"
+#include "main.h"
 
 #include "AhoCorasickPlus.h"
 #include "patr.h"
@@ -26,6 +30,10 @@ u_int32_t extFilter::ndpi_size_flow_struct = 0;
 u_int32_t extFilter::ndpi_size_id_struct = 0;
 u_int32_t extFilter::current_ndpi_memory = 0;
 u_int32_t extFilter::max_ndpi_memory = 0;
+
+static struct rte_ring *worker_ring;
+
+uint64_t extFilter::_tsc_hz;
 
 extFilter::extFilter(): _helpRequested(false), _listDPDKPorts(false), _nbRxQueues(1)
 {
@@ -42,7 +50,7 @@ extFilter::~extFilter()
  * Prepare the configuration for each core. Configuration includes: which DpdkDevices and which RX queues to receive packets from, where to send the matched
  * packets, etc.
  */
-void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, std::vector<pcpp::SystemCore>& coresToUse, WorkerConfig workerConfigArr[], int workerConfigArrLen, int nbRxQueues)
+void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, std::vector<pcpp::SystemCore>& coresToUse, WorkerConfig workerConfigArr[], int workerConfigArrLen, int num_of_readers, int nbRxQueues)
 {
 	// create a list of pairs of DpdkDevice and RX queues for all RX queues in all requested devices
 	int totalNumOfRxQueues = 0;
@@ -60,8 +68,11 @@ void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, 
 	}
 
 	// calculate how many RX queues each core will read packets from. We divide the total number of RX queues with total number of core
-	int numOfRxQueuesPerCore = totalNumOfRxQueues / coresToUse.size();
-	int rxQueuesRemainder = totalNumOfRxQueues % coresToUse.size();
+//	int numOfRxQueuesPerCore = totalNumOfRxQueues / coresToUse.size();
+//	int rxQueuesRemainder = totalNumOfRxQueues % coresToUse.size();
+
+	int numOfRxQueuesPerCore = totalNumOfRxQueues / num_of_readers;
+	int rxQueuesRemainder = totalNumOfRxQueues % num_of_readers;
 
 	// prepare the configuration for every core: divide the devices and RX queue for each device with the various cores
 	int i = 0;
@@ -86,10 +97,10 @@ void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, 
 		}
 
 		// print configuration for core
-		printf("   Core configuration:\n");
+		printf("\tCore configuration:\n");
 		for (InputDataConfig::iterator iter = workerConfigArr[i].InDataCfg.begin(); iter != workerConfigArr[i].InDataCfg.end(); iter++)
 		{
-			printf("      DPDK device#%d: ", iter->first->getDeviceId());
+			printf("\t\tReader thread DPDK device#%d: ", iter->first->getDeviceId());
 			for (std::vector<int>::iterator iter2 = iter->second.begin(); iter2 != iter->second.end(); iter2++)
 			{
 				printf("RX-Queue#%d;  ", *iter2);
@@ -99,7 +110,7 @@ void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, 
 		}
 		if (workerConfigArr[i].InDataCfg.size() == 0)
 		{
-			printf("      None\n");
+			printf("\t\tWorker thread\n");
 		}
 		i++;
 	}
@@ -111,13 +122,19 @@ void extFilter::initialize(Application& self)
 	loadConfiguration();
 	ServerApplication::initialize(self);
 
-	// initialize DPDK
-	if (!pcpp::DpdkDeviceList::initDpdk(_coreMaskToUse, _BufPoolSize))
+	_num_of_readers = 1;
+//	_num_of_readers=config().getInt("num_of_readers", 1);
+	_num_of_workers=config().getInt("num_of_workers", 1);
+	if(!_num_of_readers)
 	{
-		logger().fatal("Couldn't initialize DPDK!");
-		throw Poco::Exception("Couldn't initialize DPDK");
+		logger().fatal("Number of readers must be greate zero");
+		throw Poco::Exception("Number of readers must be greate zero");
 	}
-
+	if(!_num_of_workers)
+	{
+		logger().fatal("Number of workers must be greate zero");
+		throw Poco::Exception("Number of workers must be greate zero");
+	}
 
 	_lower_host=config().getBool("lower_host", false);
 	_match_url_exactly=config().getBool("match_url_exactly", false);
@@ -126,13 +143,25 @@ void extFilter::initialize(Application& self)
 	_statistic_interval=config().getInt("statistic_interval", 0);
 	_nbRxQueues=config().getInt("rx_queues", 1);
 	_BufPoolSize=config().getInt("mbuf_pool_size", DEFAULT_MBUF_POOL_SIZE);
+
+
+	logger().information("Setting mbuf size to %u",_BufPoolSize);
+	// initialize DPDK
+	if (!pcpp::DpdkDeviceList::initDpdk(_coreMaskToUse, _BufPoolSize))
+	{
+		logger().fatal("Couldn't initialize DPDK!");
+		throw Poco::Exception("Couldn't initialize DPDK");
+	}
+
 	_coreMaskToUse=config().getInt("core_mask", pcpp::getCoreMaskForAllMachineCores());
+	_ring_size=config().getInt("ring_size", DEFAULT_RING_SIZE);
 
 	_urlsFile=config().getString("urllist","");
 	_domainsFile=config().getString("domainlist","");
 	_sslIpsFile=config().getString("sslips","");
 	_sslFile=config().getString("ssllist","");
 	_hostsFile=config().getString("hostlist","");
+	_statisticsFile=config().getString("statisticsfile","");
 
 	std::string http_code=config().getString("http_code","");
 	if(!http_code.empty())
@@ -182,6 +211,11 @@ void extFilter::initialize(Application& self)
 
 	// removing DPDK master core from core mask because DPDK worker threads cannot run on master core
 	_coreMaskToUse = _coreMaskToUse & ~(pcpp::DpdkDeviceList::getInstance().getDpdkMasterCore().Mask);
+	
+	// init value...
+	_tsc_hz = rte_get_tsc_hz();
+
+
 }
 
 void extFilter::uninitialize()
@@ -322,17 +356,61 @@ int extFilter::main(const ArgVec& args)
 		ptr=(std::map<uint16_t, bool> *)pcpp::HttpMessage::getHTTPPortMap();
 		ptr->clear();
 
+		pcpp::CoreMask tempCoreMask = _coreMaskToUse;
+		size_t numOfCoresInMask = 0;
+		int coreNum = 0;
+		while (tempCoreMask > 0)
+		{
+			if (tempCoreMask & 1)
+			{
+				numOfCoresInMask++;
+			}
+			tempCoreMask = tempCoreMask >> 1;
+			coreNum++;
+		}
 
+		if(numOfCoresInMask < 2)
+		{
+			logger().fatal("Minimum number of required cores is 2");
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
+		if(_num_of_readers + _num_of_workers > numOfCoresInMask)
+		{
+			logger().fatal("Number of cores (%d) is not enought for starting reader and worker threads (%d). Check the configuration.", (int) numOfCoresInMask, int (_num_of_readers + _num_of_workers));
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
+		if(_ring_size > _BufPoolSize)
+		{
+			logger().fatal("Size of ring buffer can't be bigger than mbuffer size. Check the configuration.");
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
+		if(_num_of_readers + _num_of_workers != numOfCoresInMask)
+		{
+			int total_workers = _num_of_readers + _num_of_workers;
+			tempCoreMask = _coreMaskToUse;
+			int z=1;
+			while (tempCoreMask > 0)
+			{
+				if (tempCoreMask & 1)
+				{
+					z++;
+					if(z == total_workers)
+						break;
+				}
+				tempCoreMask = tempCoreMask >> 1;
+			}
+			_coreMaskToUse = _coreMaskToUse & tempCoreMask;
+		}
+		// extract core vector from core mask
+		std::vector<pcpp::SystemCore> coresToUse;
+		pcpp::createCoreVectorFromCoreMask(_coreMaskToUse, coresToUse);
 		struct sigaction handler;
 		handler.sa_handler = handleSignal;
 		handler.sa_flags   = 0;
 		sigemptyset(&handler.sa_mask);
 		sigaction(SIGHUP, &handler, NULL);
+		worker_ring = rte_ring_create("worker_ring", rte_align32pow2(_ring_size), rte_socket_id(), 0);
 
-		// extract core vector from core mask
-		std::vector<pcpp::SystemCore> coresToUse;
-		pcpp::createCoreVectorFromCoreMask(_coreMaskToUse, coresToUse);
-    
 		// collect the list of DPDK devices
 		std::vector<pcpp::DpdkDevice*> dpdkDevicesToUse;
 
@@ -341,17 +419,17 @@ int extFilter::main(const ArgVec& args)
 			pcpp::DpdkDevice* dev = pcpp::DpdkDeviceList::getInstance().getDeviceByPort(*iter);
 			if (dev == NULL)
 			{
-				logger().fatal("DPDK device for port %d doesn't exist", *iter); // XXX check it!!!
+				logger().fatal("DPDK device for port %d doesn't exist", *iter);
 				return Poco::Util::Application::EXIT_OK;
 			}
-			std::cout << "pushing device with port " << *iter << std::endl;
+			//std::cout << "pushing device with port " << *iter << std::endl;
 			dpdkDevicesToUse.push_back(dev);
 		}
 
 		// go over all devices and open them
 		for (std::vector<pcpp::DpdkDevice*>::iterator iter = dpdkDevicesToUse.begin(); iter != dpdkDevicesToUse.end(); iter++)
 		{
-			std::cout << "total num of rx queue: " << (*iter)->getTotalNumOfRxQueues() << " total num of tx queues: " << (*iter)->getTotalNumOfTxQueues() << std::endl;
+			//std::cout << "total num of rx queue: " << (*iter)->getTotalNumOfRxQueues() << " total num of tx queues: " << (*iter)->getTotalNumOfTxQueues() << std::endl;
 			if (!(*iter)->openMultiQueues(_nbRxQueues, 1))
 			{
 				logger().fatal("Couldn't open DPDK device #%d, PMD '%s'", (*iter)->getDeviceId(), (*iter)->getPMDName());
@@ -361,12 +439,25 @@ int extFilter::main(const ArgVec& args)
 
 
 		WorkerConfig workerConfigArr[coresToUse.size()];
-		prepareCoreConfiguration(dpdkDevicesToUse, coresToUse, workerConfigArr, coresToUse.size(),_nbRxQueues);
+		prepareCoreConfiguration(dpdkDevicesToUse, coresToUse, workerConfigArr, coresToUse.size(), _num_of_readers, _nbRxQueues);
 
 		// create worker thread for every core
 		std::vector<pcpp::DpdkWorkerThread*> workerThreadVec;
-		int i = 0;
-		for (std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin(); iter != coresToUse.end(); iter++)
+		uint32_t i = 0;
+		
+		std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin();
+		// подгототавливаем readerы
+		for(i=0; i < _num_of_readers; i++)
+		{
+			std::string workerName("ReaderThread " + std::to_string(i));
+			logger().debug("Preparing thread '%s'", workerName);
+			ReaderThread* newWorker = new ReaderThread(workerName, workerConfigArr[i], worker_ring);
+			workerThreadVec.push_back(newWorker);
+			iter++;
+		}
+		flowHash *mFlowHash = new flowHash(rte_socket_id()); // update socket id
+		int num_of_workers=_num_of_workers;
+		while(iter != coresToUse.end() && num_of_workers)
 		{
 			if(!_urlsFile.empty())
 			{
@@ -397,7 +488,8 @@ int extFilter::main(const ArgVec& args)
 			if(!_hostsFile.empty())
 			{
 				workerConfigArr[i].ipportMap = new IPPortMap;
-				loadHosts(_hostsFile,workerConfigArr[i].ipportMap);
+				workerConfigArr[i].ipPortMap = new Patricia();
+				loadHosts(_hostsFile, workerConfigArr[i].ipportMap, workerConfigArr[i].ipPortMap);
 			}
 //			workerConfigArr[i].PathToWritePackets = "thread"+std::to_string(i)+".pcap";
 			workerConfigArr[i].match_url_exactly = _match_url_exactly;
@@ -411,26 +503,40 @@ int extFilter::main(const ArgVec& args)
 				return Poco::Util::Application::EXIT_CONFIG;
 			}
 			if(!_protocolsFile.empty())
+			{
+				logger().debug("Loading nDPI protocols from file %s", _protocolsFile);
 				ndpi_load_protocols_file(workerConfigArr[i].ndpi_struct, (char *)_protocolsFile.c_str());
-			
+			}
+
 			std::string workerName("WorkerThread " + std::to_string(i));
-			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i]);
+			logger().debug("Preparing thread '%s'", workerName);
+			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i], worker_ring, mFlowHash);
 			workerThreadVec.push_back(newWorker);
 			i++;
+			iter++;
+			num_of_workers--;
 		}
-
 
 		Poco::TaskManager tm;
 		tm.start(new SenderTask(_sender_params));
 
 		logger().debug("Starting worker threads...");
-		// start all worker threads
+		// start all worker threads from the end...
 		if (!pcpp::DpdkDeviceList::getInstance().startDpdkWorkerThreads(_coreMaskToUse, workerThreadVec))
 		{
 			logger().fatal("Couldn't start worker threads");
 			return Poco::Util::Application::EXIT_OK;
 		}
-		tm.start(new StatisticTask(_statistic_interval, workerThreadVec));
+		sleep(4);
+		// start readers...
+		for(auto it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
+		{
+			if(dynamic_cast<ReaderThread*>(*it) != nullptr)
+			{
+				dynamic_cast<ReaderThread*>(*it)->canRun(true);
+			}
+		}
+		tm.start(new StatisticTask(_statistic_interval, workerThreadVec, _statisticsFile));
 		tm.start(new ReloadTask(this, workerThreadVec));
 		waitForTerminationRequest();
 		pcpp::DpdkDeviceList::getInstance().stopDpdkWorkerThreads();
@@ -443,8 +549,9 @@ int extFilter::main(const ArgVec& args)
 		{
 			WorkerThread* thread = (WorkerThread*)(*iter);
 			delete thread;
+			
 		}
-
+		rte_ring_free(worker_ring);
 	}
 	return Poco::Util::Application::EXIT_OK;
 }
@@ -571,7 +678,7 @@ void extFilter::loadSSLIP(const std::string &fn, Patricia *patricia)
 	logger().debug("Finish loading SSL ips");
 }
 
-void extFilter::loadHosts(std::string &fn,IPPortMap *ippm)
+void extFilter::loadHosts(std::string &fn, IPPortMap *ippm, Patricia *patricia)
 {
 	logger().debug("Loading ip:port from file %s",fn);
 	Poco::FileInputStream hf(fn);
@@ -610,6 +717,10 @@ void extFilter::loadHosts(std::string &fn,IPPortMap *ippm)
 					}
 					ippm->insert(std::make_pair(ip_addr,ports));
 					logger().debug("Inserted ip: %s from line %d", ip, lineno);
+					if(!patricia->make_and_lookup(ip))
+					{
+						logger().information("Unable to add IP address %s from line %d to the IP:port list", ip, lineno);
+					}
 				} else {
 					logger().debug("Adding port %s from line %d to ip %s", port,lineno,ip);
 					it->second.insert(porti);

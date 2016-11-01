@@ -20,19 +20,20 @@
 #pragma once
 #include <Poco/Task.h>
 #include <DpdkDevice.h>
+#include <DpdkDeviceList.h>
 #include <vector>
 
 class StatisticTask: public Poco::Task
 {
 public:
-	StatisticTask(int sec, std::vector<pcpp::DpdkWorkerThread*>& workerThreadVector);
+	StatisticTask(int sec, std::vector<pcpp::DpdkWorkerThread*>& workerThreadVector, std::string &statisticsFile);
 	void runTask();
 	void OutStatistic();
 
 private:
-	// через сколько секунд выводить инфо о потреблении память. 0 - не выводить
 	int _sec;
 	std::vector<pcpp::DpdkWorkerThread*>& workerThreadVec;
+	std::string _statisticsFile;
 };
 
 

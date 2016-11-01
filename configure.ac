@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.1, max1976@mail.ru)
+AC_INIT(extFilter, 0.2, max1976@mail.ru)
 
 PPP_HOME=./PcapPlusPlus
 DPDK_HOME=
@@ -49,9 +49,9 @@ AC_MSG_CHECKING([for debug enabled])
 
 
 if test x"$debug" = x"true"; then
-    CXXFLAGS="$CXXFLAGS -std=c++0x -O0 -g -Wall -pthread"
+    CXXFLAGS="$CXXFLAGS -std=c++11 -O0 -g -Wall -pthread -msse -msse2 -msse3 -mssse3"
 else
-    CXXFLAGS="$CXXFLAGS -std=c++0x -O2 -pthread"
+    CXXFLAGS="$CXXFLAGS -std=c++11 -O2 -Wall -pthread -msse -msse2 -msse3 -mssse3"
 fi
 
 AC_COMPILE_IFELSE([AC_LANG_SOURCE(

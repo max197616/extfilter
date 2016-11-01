@@ -140,16 +140,17 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 	tcph->psh = f_psh;
 	if(f_reset)
 	{
-		tcph->ack = 0;
-		tcph->ack_seq = 0;
+		tcph->ack = 1;
+		tcph->ack_seq = seqnum;
 		tcph->fin = 0;
+		tcph->window = 0;
 	} else {
 		tcph->ack_seq = seqnum;
 		tcph->ack = 1;
 		tcph->fin = 1;
+		tcph->window = htons(5840);
 	}
 	tcph->urg = 0;
-	tcph->window = htons(5840);
 	tcph->check = 0;
 	tcph->urg_ptr = 0;
 
@@ -210,15 +211,13 @@ void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_i
 {
 	// формируем дополнительные параметры
 	std::string tstr=rHeader;
-	if(!additional_param.empty())
+	if(!additional_param.empty() && _parameters.redirect_url[_parameters.redirect_url.length()-1] == '?')
 	{
 		tstr = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + additional_param + "\r\nConnection: close\r\n";
 	} else {
 		tstr=rHeader;
 	}
 	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, tstr, 0, 0);
-	// And reset session with client
-//	this->sendPacket( dst_ip, user_ip, dst_port, user_port, acknum, seqnum, redirectHeader, 1, 0);
 	
 	// And reset session with server
 	if(_parameters.send_rst_to_server)
