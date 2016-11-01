@@ -27,7 +27,6 @@
 #include "sendertask.h"
 #include "flow.h"
 #include "flowentry.h"
-#include "utils.h"
 #include <rte_hash.h>
 
 #define tcphdr(x)	((struct tcphdr *)(x))
