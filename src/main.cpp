@@ -186,13 +186,26 @@ void extFilter::initialize(Application& self)
 	_add_p_type=it->second;
 	logger().debug("URL additional info set to %s", add_p_type);
 
-	int dpdk_port = config().getInt("dpdk_port", -1);
-	if(dpdk_port == -1)
+	std::string dpdk_ports=config().getString("dpdk_ports","");
+	if(!dpdk_ports.empty())
 	{
-		logger().fatal("DPDK port is not specified!");
-		throw Poco::Exception("DPDK port is not specified!");
+		Poco::StringTokenizer restTokenizer(dpdk_ports, ",");
+		for(Poco::StringTokenizer::Iterator itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
+		{
+			_dpdkPortVec.push_back(Poco::NumberParser::parse(*itr));
+		}
 	}
-	_dpdkPortVec.push_back(dpdk_port);
+
+	int dpdk_port = config().getInt("dpdk_port", -1);
+	if(dpdk_port != -1)
+		_dpdkPortVec.push_back(dpdk_port);
+
+	if(_dpdkPortVec.empty())
+	{
+		logger().fatal("DPDK ports not specified!");
+		throw Poco::Exception("DPDK ports not specified!");
+	}
+
 
 	_protocolsFile=config().getString("protocols","");
 
@@ -229,7 +242,7 @@ void extFilter::defineOptions(Poco::Util::OptionSet& options)
 			.repeatable(false)
 			.argument("FILE"));
 	options.addOption(
-		Poco::Util::Option("dpdk-port","d","DPDK port to receive packets from.")
+		Poco::Util::Option("dpdk-ports","d","A comma-separated list of the DPDK port numbers to receive packets from.")
 			.required(false)
 			.repeatable(false)
 			.argument("PORT_1..."));
@@ -260,10 +273,13 @@ void extFilter::handleOption(const std::string& name,const std::string& value)
 	{
 		_BufPoolSize =  Poco::NumberParser::parse(value);
 	}
-	if(name == "dpdk-port")
+	if(name == "dpdk-ports")
 	{
-		int dpdk_port = Poco::NumberParser::parse(value);
-		_dpdkPortVec.push_back(dpdk_port);
+		Poco::StringTokenizer restTokenizer(value, ",");
+		for(Poco::StringTokenizer::Iterator itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
+		{
+			_dpdkPortVec.push_back(Poco::NumberParser::parse(*itr));
+		}
 	}
 }
 
