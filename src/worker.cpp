@@ -492,7 +492,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 						{
 							case A_TYPE_ID: add_param="id="+std::to_string(match.id);
 								break;
-							case A_TYPE_URL: add_param="url="+host;
+							case A_TYPE_URL: add_param="url=http://"+host;
 								break;
 							default: break;
 						}
@@ -556,7 +556,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 						{
 							case A_TYPE_ID: add_param="id="+std::to_string(match.id);
 								break;
-							case A_TYPE_URL: add_param="url="+host;
+							case A_TYPE_URL: add_param="url="+uri_o;
 								break;
 							default: break;
 						}
