@@ -113,6 +113,8 @@ private:
 	struct ndpi_flow_info **ipv4_flows;
 	struct ndpi_flow_info **ipv6_flows;
 
+	struct rte_mempool *flows_pool;
+
 	bool analyzePacket(pcpp::Packet &parsedPacket);
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
 	bool analyzePacketFlow(struct rte_mbuf *m, uint64_t timestamp);

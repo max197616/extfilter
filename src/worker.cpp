@@ -40,13 +40,32 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 		ring(iring), m_FlowHash(fh)
 {
 	ipv4_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+	if(ipv4_flows == nullptr)
+	{
+		_logger.fatal("Not enough memory for ipv4 flows");
+		throw Poco::Exception("Not enough memory for ipv4 flows");
+	}
 	ipv6_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+	if(ipv6_flows == nullptr)
+	{
+		_logger.fatal("Not enough memory for ipv6 flows");
+		throw Poco::Exception("Not enough memory for ipv6 flows");
+	}
+	_logger.debug("Allocating %d bytes for flow pool", (int) (FLOW_HASH_ENTRIES*2*sizeof(struct ndpi_flow_info)));
+	flows_pool = rte_mempool_create("flows_pool", FLOW_HASH_ENTRIES*2, sizeof(struct ndpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_socket_id(), 0);
+	if(flows_pool == nullptr)
+	{
+		_logger.fatal("Not enough memory for flows pool");
+		throw Poco::Exception("Not enough memory for flows pool");
+	}
+
 }
 
 WorkerThread::~WorkerThread()
 {
 	free(ipv4_flows);
 	free(ipv6_flows);
+	rte_mempool_free(flows_pool);
 }
 
 ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64_t timestamp)
@@ -68,12 +87,13 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 		}
 		if(ret == -ENOENT)
 		{
-			struct ndpi_flow_info *newflow = (struct ndpi_flow_info *)calloc(1,sizeof(struct ndpi_flow_info));
-			if(newflow == NULL)
+			struct ndpi_flow_info *newflow;
+			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
 			{
-				_logger.fatal("Not enought memory for the flow");
-				throw Poco::Exception("Not enought memory for the flow");
+				_logger.fatal("Not enough memory for the flow in the flows_pool");
+				throw Poco::Exception("Not enough memory for the flow in the flows_pool");
 			}
+			memset(newflow,0,sizeof(struct ndpi_flow_info));
 			newflow->last_seen = timestamp;
 			newflow->ip_version = 6;
 			newflow->cli2srv_direction = true;
@@ -83,8 +103,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
 			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
 			{
-				_logger.fatal("Not enought memory for the flow");
-				throw Poco::Exception("Not enought memory for the flow");
+				_logger.fatal("Not enough memory for the flow");
+				throw Poco::Exception("Not enough memory for the flow");
 			}
 			ret = rte_hash_add_key(m_FlowHash->getIPv6Hash(), &key);
 			if(ret == -EINVAL)
@@ -129,12 +149,13 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 		}
 		if(ret == -ENOENT)
 		{
-			struct ndpi_flow_info *newflow = (struct ndpi_flow_info *)calloc(1,sizeof(struct ndpi_flow_info));
-			if(newflow == NULL)
+			struct ndpi_flow_info *newflow;
+			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
 			{
-				_logger.fatal("Not enought memory for the flow");
-				throw Poco::Exception("Not enought memory for the flow");
+				_logger.fatal("Not enough memory for the flow in the flows_pool");
+				throw Poco::Exception("Not enough memory for the flow in the flows_pool");
 			}
+			memset(newflow,0,sizeof(struct ndpi_flow_info));
 			newflow->last_seen = timestamp;
 			newflow->ip_version = 4;
 			newflow->cli2srv_direction = true;
@@ -144,8 +165,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
 			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
 			{
-				_logger.fatal("Not enought memory for the flow");
-				throw Poco::Exception("Not enought memory for the flow");
+				_logger.fatal("Not enough memory for the flow");
+				throw Poco::Exception("Not enough memory for the flow");
 			}
 			ret = rte_hash_add_key(m_FlowHash->getIPv4Hash(), &key);
 			if(ret == -EINVAL)
@@ -638,7 +659,7 @@ bool WorkerThread::run(uint32_t coreId)
 						_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
 					} else {
 						ipv4_flows[iter_flows]->free_mem();
-						delete ipv4_flows[iter_flows];
+						rte_mempool_put(flows_pool,ipv4_flows[iter_flows]);
 						ipv4_flows[iter_flows] = nullptr;
 						m_ThreadStats.ndpi_flows_count--;
 						m_ThreadStats.ndpi_ipv4_flows_count--;
@@ -653,7 +674,7 @@ bool WorkerThread::run(uint32_t coreId)
 						_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
 					} else {
 						ipv6_flows[iter_flows]->free_mem();
-						delete ipv6_flows[iter_flows];
+						rte_mempool_put(flows_pool,ipv6_flows[iter_flows]);
 						ipv6_flows[iter_flows] = nullptr;
 						m_ThreadStats.ndpi_flows_count--;
 						m_ThreadStats.ndpi_ipv6_flows_count--;
