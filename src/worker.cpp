@@ -215,6 +215,31 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	int ip_version=0;
 	uint32_t ip_len;
 	int iphlen=0;
+
+	if(ether_type == ETHER_TYPE_VLAN || ether_type == 0x8847)
+	{
+		while(1)
+		{
+			if(ether_type == ETHER_TYPE_VLAN)
+			{
+				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)eth_hdr;
+				ether_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
+				eth_hdr = rte_pktmbuf_mtod_offset(m, struct ether_hdr *,sizeof(struct vlan_hdr));
+			} else if(ether_type == 0x8847)
+			{
+				uint8_t bos;
+				bos = ((uint8_t *)eth_hdr)[2] & 0x1;
+				eth_hdr = rte_pktmbuf_mtod_offset(m, struct ether_hdr *,4);
+				if(bos)
+				{
+					ether_type = ETHER_TYPE_IPv4;
+					break;
+				}
+			} else
+				break;
+		}
+	}
+
 	// определяем версию протокола
 	if (ether_type == ETHER_TYPE_IPv4)
 	{
