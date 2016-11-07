@@ -222,7 +222,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		{
 			if(ether_type == ETHER_TYPE_VLAN)
 			{
-				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(l3 + sizeof(struct vlan_hdr));
+				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(l3);
 				ether_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
 				l3 += sizeof(struct vlan_hdr);
 			} else if(ether_type == 0x8847)
