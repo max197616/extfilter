@@ -210,12 +210,10 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param )
 {
 	// формируем дополнительные параметры
-	std::string tstr=rHeader;
+	std::string tstr = rHeader;
 	if(!additional_param.empty() && _parameters.redirect_url[_parameters.redirect_url.length()-1] == '?')
 	{
 		tstr = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + additional_param + "\r\nConnection: close\r\n";
-	} else {
-		tstr=rHeader;
 	}
 	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, tstr, 0, 0);
 	
