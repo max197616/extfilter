@@ -1,5 +1,5 @@
 AM_CPPFLAGS = -I$(top_srcdir)/$(PPP_HEADER) -I$(top_srcdir)/nDPI/src/include -I$(DPDK_INCLUDE)
-LDADD =-lpcap -L$(top_srcdir)/$(PPP_LIB) -lPcap++ -lPacket++ -lCommon++ \
+LDADD =-L$(top_srcdir)/$(PPP_LIB) -lPcap++ -lPacket++ -lCommon++ -lpcap\
 -L $(DPDK_LIB)  -lrt -lm -ldl $(top_srcdir)/nDPI/src/lib/.libs/libndpi.a
 
 bin_PROGRAMS = extFilter
