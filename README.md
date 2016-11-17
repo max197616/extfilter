@@ -40,6 +40,45 @@ make
 --------------
 Для работы DPDK необходимо настроить huge-pages и подключить необходимые сетевые адаптеры в DPDK.
 
+Пример настройки для CentOS 7:
+
+- Создаем в каталоге /usr/lib/tunded папку dpdk-tune
+
+- Создаем в dpdk-tune файл tunded.conf:
+```
+[main]
+include=latency-performance
+
+[bootloader]
+cmdline=isolcpus=1,2,3 default_hugepagesz=1G hugepagesz=1G hugepages=4
+```
+isolcpus=1,2,3 - Какие ядра освободить для работы dpdk/extfilter.
+default_hugepagesz=1G hugepagesz=1G - Размер страницы памяти для dpdk/extfilter.
+hugepages=4 - Количество страниц памяти для dpdk/extfilter (в данном примере под dpdk/extfilter будет выделено 4 Гигабайта памяти).
+
+- Активируем профиль
+```bash
+tuned-adm profile dpdk-tune
+```
+
+- Отправляем сервер на перезагрузку.
+
+- Загружаем необходимые драйвера
+```bash
+modprobe uio
+insmod /path/to/dpdk/build/kmod/igb_uio.ko
+```
+
+- Подключаем сетевую карту к dpdk
+```bash
+/path/to/dpdk/tools/dpdk-devbind.py --bind=igb_uio dev_pci_num
+```
+Получить dev_pci_num можно при помощи команды:
+```bash
+/path/to/dpdk/tools/dpdk-devbind.py --status
+```
+
+
 Запуск
 ------
 Параметры работы программы задаются в конфигурационном файле.
@@ -53,3 +92,7 @@ make
 -----------------------------
 Для загрузки обновленных списков блокировки без перезапуска программы необходимо подать сигнал HUP.
 
+
+Donate
+------
+Yandex.Money 410014706910423
