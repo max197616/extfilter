@@ -79,7 +79,29 @@ my %https_add_ports;
 my %ssl_hosts;
 my %ssl_ip;
 
-my $sth = $dbh->prepare("SELECT * FROM zap2_domains");
+my $n_masked_domains = 0;
+my %masked_domains;
+my $sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain like '*.%'");
+$sth->execute();
+while (my $ips = $sth->fetchrow_hashref())
+{
+	my $dm = $ips->{domain};
+	$dm =~ s/\*\.//g;
+	my $domain_canonical=new URI("http://".$dm)->canonical();
+	$domain_canonical =~ s/^http\:\/\///;
+	$domain_canonical =~ s/\/$//;
+	$domain_canonical =~ s/\.$//;
+	$masked_domains{$domain_canonical} = 1;
+	$n_masked_domains++;
+	print $DOMAINS_FILE "*.",$domain_canonical,"\n";
+	if($domains_ssl eq "true")
+	{
+		print $SSL_HOST_FILE "*.",$domain_canonical,"\n";
+	}
+}
+$sth->finish();
+
+$sth = $dbh->prepare("SELECT * FROM zap2_domains");
 $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
 {
@@ -88,6 +110,17 @@ while (my $ips = $sth->fetchrow_hashref())
 	$domain_canonical =~ s/^http\:\/\///;
 	$domain_canonical =~ s/\/$//;
 	$domain_canonical =~ s/\.$//;
+	my $skip = 0;
+	foreach my $dm (keys %masked_domains)
+	{
+		if($domain_canonical =~ /$dm$/)
+		{
+#			print "found mask $dm for domain $domain\n";
+			$skip++;
+			last;
+		}
+	}
+	next if($skip);
 	$logger->debug("Canonical domain: $domain_canonical");
 	print $DOMAINS_FILE $domain_canonical."\n";
 	if($domains_ssl eq "true")
@@ -239,7 +272,7 @@ my $ssl_host_file_hash=get_md5_sum($ssls_file);
 
 if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
 {
-	$logger->debug("Restarting extFilter...");
+	$logger->debug("Restarting nfqfilter...");
 	system("/bin/systemctl", "restart","extfilter");
 	if ( $? == -1 )
 	{
