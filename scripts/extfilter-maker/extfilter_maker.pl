@@ -272,7 +272,7 @@ my $ssl_host_file_hash=get_md5_sum($ssls_file);
 
 if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
 {
-	$logger->debug("Restarting nfqfilter...");
+	$logger->debug("Restarting extfilter...");
 	system("/bin/systemctl", "restart","extfilter");
 	if ( $? == -1 )
 	{
