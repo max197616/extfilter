@@ -42,9 +42,9 @@ make
 
 Пример настройки для CentOS 7:
 
-- Создаем в каталоге /usr/lib/tunded папку dpdk-tune
+- Создаем в каталоге /usr/lib/tuned папку dpdk-tune
 
-- Создаем в dpdk-tune файл tunded.conf:
+- Создаем в dpdk-tune файл tuned.conf:
 ```
 [main]
 include=latency-performance
