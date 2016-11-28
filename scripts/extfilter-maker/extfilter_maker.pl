@@ -114,7 +114,7 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $skip = 0;
 	foreach my $dm (keys %masked_domains)
 	{
-		if($domain_canonical =~ /$dm$/)
+		if($domain_canonical =~ /\.$dm$/ || $domain_canonical =~ /^$dm$/)
 		{
 #			print "found mask $dm for domain $domain\n";
 			$skip++;
@@ -166,6 +166,20 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $path=$url1->path();
 	my $query=$url1->query();
 	my $port=$url1->port();
+
+	$host =~ s/\.$//;
+	my $skip = 0;
+	foreach my $dm (keys %masked_domains)
+	{
+		if($host =~ /\.$dm$/ || $host =~ /^$dm$/)
+		{
+#			print "found mask $dm for domain $host\n";
+			$skip++;
+			last;
+		}
+	}
+	next if($skip);
+
 	if($scheme eq 'https')
 	{
 		next if(defined $ssl_hosts{$host});
@@ -196,12 +210,11 @@ while (my $ips = $sth->fetchrow_hashref())
 		$http_add_ports{$port}=1;
 	}
 
-	$host =~ s/\.$//;
 	$url1->host($host);
 
-	my $url11=$url1->canonical();
-
+	my $url11 = $url1->canonical();
 	$url11 =~ s/^http\:\/\///;
+
 	$url2 =~ s/^http\:\/\///;
 
 	# убираем любое упоминание о фрагменте... оно не нужно
@@ -269,7 +282,6 @@ $dbh->disconnect();
 my $domains_file_hash=get_md5_sum($domains_file);
 my $urls_file_hash=get_md5_sum($urls_file);
 my $ssl_host_file_hash=get_md5_sum($ssls_file);
-
 
 if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
 {
