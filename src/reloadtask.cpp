@@ -51,6 +51,8 @@ void ReloadTask::runTask()
 			_logger.information("Reloading data from files...");
 			for(std::vector<pcpp::DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 			{
+				if(dynamic_cast<WorkerThread*>(*it) == nullptr)
+					continue;
 				WorkerConfig& config=(static_cast<WorkerThread*>(*it))->getConfig();
 				AhoCorasickPlus *to_del_atm;
 				DomainsMatchType *to_del_dm;
