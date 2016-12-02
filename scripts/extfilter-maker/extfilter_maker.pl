@@ -168,10 +168,12 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $port=$url1->port();
 
 	$host =~ s/\.$//;
+
+	my $do=0;
 	my $skip = 0;
 	foreach my $dm (keys %masked_domains)
 	{
-		if($host =~ /\.$dm$/ || $host =~ /^$dm$/)
+		if($host =~ /\.\Q$dm\E$/ || $host =~ /^\Q$dm\E$/)
 		{
 #			print "found mask $dm for domain $host\n";
 			$skip++;
@@ -285,15 +287,16 @@ my $ssl_host_file_hash=get_md5_sum($ssls_file);
 
 if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
 {
-	$logger->debug("Restarting extfilter...");
-	system("/bin/systemctl", "restart","extfilter");
-	if ( $? == -1 )
+	system("/bin/systemctl", "reload-or-restart","extfilter");
+	if($? != 0)
 	{
-		$logger->error("extfilter restart failed: $!");
-	} else {
-		$logger->info("extfilter successfully restarted!");
+		$logger->error("Can't reload or restart extfilter!");
+		exit 1;
 	}
+	$logger->info("Extfilter successfully reloaded/resterted!");
 }
+
+exit 0;
 
 sub get_md5_sum
 {
