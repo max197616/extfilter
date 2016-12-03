@@ -169,6 +169,7 @@ void extFilter::initialize(Application& self)
 	}
 	_sender_params.redirect_url=config().getString("redirect_url","");
 	_sender_params.send_rst_to_server=config().getBool("rst_to_server",false);
+	_sender_params.mtu=config().getInt("out_mtu",1500);
 
 	std::string add_p_type=config().getString("url_additional_info","none");
 	std::transform(add_p_type.begin(), add_p_type.end(), add_p_type.begin(), ::tolower);

@@ -45,8 +45,8 @@ public:
 		bool send_rst_to_server;
 		int ttl;
 		int ip6_hops;
-
-		params() : code("302 Moved Temporarily"), send_rst_to_server(false), ttl(250), ip6_hops(250) { }
+		int mtu;
+		params() : code("302 Moved Temporarily"), send_rst_to_server(false), ttl(250), ip6_hops(250), mtu(1500) { }
 	};
 	CSender( std::string url );
 	CSender(struct params &prm);
