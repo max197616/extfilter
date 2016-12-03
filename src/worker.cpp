@@ -204,6 +204,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	struct ether_hdr *eth_hdr;
 	uint16_t ether_type;
 	uint8_t *l3;
+	uint16_t l4_packet_len;
+	uint16_t payload_len;
 	struct ipv4_hdr *ipv4_header;
 	struct ipv6_hdr *ipv6_header;
 	int size=rte_pktmbuf_pkt_len(m);
@@ -248,6 +250,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		ipv4_header = (struct ipv4_hdr *)l3;
 		ip_len=rte_be_to_cpu_16(ipv4_header->total_length);
 		iphlen = (ipv4_header->version_ihl & IPV4_HDR_IHL_MASK) * IPV4_IHL_MULTIPLIER; // ipv4
+		l4_packet_len = ip_len - iphlen;
 		if(ip_len < 20)
 		{
 			m_ThreadStats.ipv4_short_packets++;
@@ -265,6 +268,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		ipv6_header = (struct ipv6_hdr *)l3;
 		ip_len=rte_be_to_cpu_16(ipv6_header->payload_len) + sizeof(ipv6_hdr);
 		iphlen = sizeof(struct ipv6_hdr);
+		l4_packet_len = rte_be_to_cpu_16(ipv6_header->payload_len);
 		if(rte_ipv6_frag_get_ipv6_fragment_header(ipv6_header) != NULL)
 		{
 			m_ThreadStats.ipv6_fragments++;
@@ -305,6 +309,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	{
 		return false;
 	}
+
+	payload_len = l4_packet_len-tcphlen;
 
 	m_ThreadStats.analyzed_packets++;
 
@@ -542,7 +548,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq,/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
 						m_ThreadStats.redirected_domains++;
 					} else {
 						std::string empty_str;
@@ -606,7 +612,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq,/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
 						m_ThreadStats.redirected_urls++;
 					} else {
 						std::string empty_str;
