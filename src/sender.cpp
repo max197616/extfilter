@@ -220,13 +220,13 @@ void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_i
 	{
 		tstr = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + additional_param + "\r\nConnection: close\r\n";
 	}
-	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, tstr, 0, 0);
+	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, tstr, 0, f_psh);
 	
 	// And reset session with server
 	if(_parameters.send_rst_to_server)
 	{
 		std::string empty_str;
-		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, f_psh);
+		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
 	}
 	return;
 }
