@@ -548,7 +548,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
 						m_ThreadStats.redirected_domains++;
 					} else {
 						std::string empty_str;
@@ -612,7 +612,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 								break;
 							default: break;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ (tcph->psh ? 1 : 0 ), add_param));
+						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
 						m_ThreadStats.redirected_urls++;
 					} else {
 						std::string empty_str;

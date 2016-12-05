@@ -90,7 +90,7 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 	int payloadlen=dt.size();
 	if(payloadlen > (_parameters.mtu - (ip_from.family() == Poco::Net::IPAddress::IPv4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)) + sizeof(struct tcphdr) - 12))
 	{
-		_logger.warning("Size of the outgoing packet bigger then the MTU. Removing all additional data in the redirect packet.");
+		_logger.warning("Size of the outgoing packet bigger than the MTU. Removing all additional data in the redirect packet.");
 		dt = rHeader;
 		payloadlen = rHeader.size();
 	}
