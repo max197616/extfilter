@@ -162,7 +162,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		}
 		next;
 	}
-	my $host=$url1->host();
+	my $host=lc($url1->host());
 	my $path=$url1->path();
 	my $query=$url1->query();
 	my $port=$url1->port();
