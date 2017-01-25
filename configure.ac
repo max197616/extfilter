@@ -208,12 +208,12 @@ if test -d "$NDPI_HOME" ; then :
 else
     AC_MSG_RESULT(not found)
     AC_MSG_NOTICE(Getting nDPI from git)
-    git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch; cd -
+    git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch; patch -p1 < ../ndpi-ssl-2.patch ; cd -
     AC_MSG_CHECKING(for nDPI $NDPI_HOME)
     if test -d "$NDPI_HOME" ; then :
 	AC_MSG_RESULT(found in $NDPI_HOME)
     else
-	AC_MSG_ERROR(Install nDPI dev: git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch ; ./autogen.sh; make; cd - )
+	AC_MSG_ERROR(Install nDPI dev: git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch ; patch -p1 < ../ndpi-ssl-2.patch ; ./autogen.sh; make; cd - )
     fi
 fi
 
