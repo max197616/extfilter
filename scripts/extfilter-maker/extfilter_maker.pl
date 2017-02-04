@@ -349,6 +349,7 @@ sub _encode_sp
 	$url =~ s/\%3D/\=/g;
 	$url =~ s/\%2B/\+/g;
 	$url =~ s/\%2C/\,/g;
+	$url =~ s/\%2F/\//g;
 	return $url;
 }
 
