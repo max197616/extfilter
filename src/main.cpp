@@ -132,6 +132,15 @@ void extFilter::initialize(Application& self)
 		throw Poco::Exception("Number of workers must be greate zero");
 	}
 
+	_flowhash_size=config().getInt("flowhash_size",1024*1024);
+	if(!rte_is_power_of_2(_flowhash_size))
+	{
+		logger().fatal("Size of the flowhash must be power of 2, got %d must be %d", (int) _flowhash_size, (int) rte_align32pow2(_flowhash_size));
+		throw Poco::Exception("Size of the flowhash must be power of 2");
+	}
+
+	_flowhash_size_per_worker=rte_align32pow2(_flowhash_size/_num_of_workers);
+
 	_lower_host=config().getBool("lower_host", false);
 	_match_url_exactly=config().getBool("match_url_exactly", false);
 	_block_undetected_ssl=config().getBool("block_undetected_ssl", false);
@@ -451,7 +460,6 @@ int extFilter::main(const ArgVec& args)
 			workerThreadVec.push_back(newWorker);
 			iter++;
 		}
-		flowHash *mFlowHash = new flowHash(rte_socket_id()); // update socket id
 		int num_of_workers=_num_of_workers;
 		while(iter != coresToUse.end() && num_of_workers)
 		{
@@ -503,6 +511,8 @@ int extFilter::main(const ArgVec& args)
 				logger().debug("Loading nDPI protocols from file %s", _protocolsFile);
 				ndpi_load_protocols_file(workerConfigArr[i].ndpi_struct, (char *)_protocolsFile.c_str());
 			}
+			logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker);
+			flowHash *mFlowHash = new flowHash(rte_socket_id(), i, _flowhash_size_per_worker); // update socket id
 
 			std::string workerName("WorkerThread " + std::to_string(i));
 			logger().debug("Preparing thread '%s'", workerName);

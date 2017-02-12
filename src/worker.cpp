@@ -39,23 +39,24 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 		_logger(Poco::Logger::get(name)),
 		ring(iring), m_FlowHash(fh)
 {
-	ipv4_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+	ipv4_flows = (struct ndpi_flow_info **)calloc(fh->getHashSize(),sizeof(struct ndpi_flow_info *));
 	if(ipv4_flows == nullptr)
 	{
 		_logger.fatal("Not enough memory for ipv4 flows");
 		throw Poco::Exception("Not enough memory for ipv4 flows");
 	}
-	ipv6_flows = (struct ndpi_flow_info **)calloc(FLOW_HASH_ENTRIES,sizeof(struct ndpi_flow_info *));
+	ipv6_flows = (struct ndpi_flow_info **)calloc(fh->getHashSize(),sizeof(struct ndpi_flow_info *));
 	if(ipv6_flows == nullptr)
 	{
 		_logger.fatal("Not enough memory for ipv6 flows");
 		throw Poco::Exception("Not enough memory for ipv6 flows");
 	}
-	_logger.debug("Allocating %d bytes for flow pool", (int) (FLOW_HASH_ENTRIES*2*sizeof(struct ndpi_flow_info)));
-	flows_pool = rte_mempool_create("flows_pool", FLOW_HASH_ENTRIES*2, sizeof(struct ndpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_socket_id(), 0);
+	_logger.debug("Allocating %d bytes for flow pool", (int) (fh->getHashSize()*2*sizeof(struct ndpi_flow_info)));
+	std::string mempool_name("flows_pool_" + name);
+	flows_pool = rte_mempool_create(mempool_name.c_str(), fh->getHashSize()*2, sizeof(struct ndpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_socket_id(), 0);
 	if(flows_pool == nullptr)
 	{
-		_logger.fatal("Not enough memory for flows pool");
+		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes", (int) (fh->getHashSize()*2*sizeof(struct ndpi_flow_info)));
 		throw Poco::Exception("Not enough memory for flows pool");
 	}
 
@@ -715,7 +716,7 @@ bool WorkerThread::run(uint32_t coreId)
 				z++;
 				iter_flows++;
 			}
-			iter_flows &= (FLOW_HASH_ENTRIES-1);
+			iter_flows &= (m_FlowHash->getHashSize()-1);
 			prev_gc_tsc = cur_tsc;
 		}
 	}

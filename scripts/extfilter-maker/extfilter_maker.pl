@@ -82,6 +82,7 @@ my %ssl_ip;
 
 my $n_masked_domains = 0;
 my %masked_domains;
+my %domains;
 my $sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain like '*.%'");
 $sth->execute();
 while (my $ips = $sth->fetchrow_hashref())
@@ -122,6 +123,12 @@ while (my $ips = $sth->fetchrow_hashref())
 		}
 	}
 	next if($skip);
+	if(defined $domains{$domain_canonical})
+	{
+		$logger->warn("Domain $domain_canonical already present in the domains list");
+		next;
+	}
+	$domains{$domain_canonical}=1;
 	$logger->debug("Canonical domain: $domain_canonical");
 	print $DOMAINS_FILE $domain_canonical."\n";
 	if($domains_ssl eq "true")
@@ -181,7 +188,11 @@ while (my $ips = $sth->fetchrow_hashref())
 		}
 	}
 	next if($skip);
-
+	if(defined $domains{$host})
+	{
+#		$logger->warn("Host '$host' from url '$url2' present in the domains");
+		next;
+	}
 	if($scheme eq 'https')
 	{
 		next if(defined $ssl_hosts{$host});
@@ -293,7 +304,7 @@ if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file
 		$logger->error("Can't reload or restart extfilter!");
 		exit 1;
 	}
-	$logger->info("Extfilter successfully reloaded/resterted!");
+	$logger->info("Extfilter successfully reloaded/restarted!");
 }
 
 exit 0;

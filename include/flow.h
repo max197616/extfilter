@@ -9,6 +9,13 @@
 #include <Poco/Logger.h>
 #include <Poco/Net/IPAddress.h>
 
+
+/*
+ * FlowHash создается на каждый worker.
+*/
+
+
+
 #define FLOW_HASH_ENTRIES (1024*1024) // default 1M. Must be power of 2.
 
 //#define FLOW_HASH_ENTRIES (250000) // default 1M
@@ -124,8 +131,9 @@ private:
 	Poco::Logger& _logger;
 	struct rte_hash *ipv4_FlowHash;
 	struct rte_hash *ipv6_FlowHash;
+	int _flowHashSize;
 public:
-	flowHash(int socket_id);
+	flowHash(int socket_id, int thread_id, int flowHashSize=FLOW_HASH_ENTRIES);
 	~flowHash();
 	inline struct rte_hash *getIPv4Hash()
 	{
@@ -139,5 +147,9 @@ public:
 	void makeIPv4Key(struct ipv4_hdr *ipv4_hdr, struct ipv4_5tuple *key);
 	void makeIPv6Key(struct ipv6_hdr *ipv6_hdr, struct ipv6_5tuple *key);
 	void makeIPKey(Poco::Net::IPAddress &src_ip, Poco::Net::IPAddress &dst_ip, uint16_t src_port, uint16_t dst_port, uint8_t protocol, struct ip_5tuple *key);
+	inline int getHashSize()
+	{
+		return _flowHashSize;
+	}
 };
 

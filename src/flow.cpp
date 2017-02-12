@@ -35,11 +35,12 @@ int ndpi_workflow_node_cmp(const void *a, const void *b)
 	return(0);
 }
 
-flowHash::flowHash(int socket_id) : _logger(Poco::Logger::get("FlowHash_" + std::to_string(socket_id)))
+flowHash::flowHash(int socket_id, int thread_id, int flowHashSize) : _logger(Poco::Logger::get("FlowHash_" + std::to_string(thread_id))),
+	_flowHashSize(flowHashSize)
 {
 	struct rte_hash_parameters ipv4_hash_params = {0};
-	std::string ipv4_hash_name("ipv4_flow_hash_" + std::to_string(socket_id));
-	ipv4_hash_params.entries = FLOW_HASH_ENTRIES;
+	std::string ipv4_hash_name("ipv4_flow_hash_" + std::to_string(thread_id));
+	ipv4_hash_params.entries = _flowHashSize;
 	ipv4_hash_params.key_len = sizeof(struct ipv4_5tuple);
 	ipv4_hash_params.hash_func = DEFAULT_HASH_FUNC;
 	ipv4_hash_params.hash_func_init_val = 0;
@@ -50,9 +51,9 @@ flowHash::flowHash(int socket_id) : _logger(Poco::Logger::get("FlowHash_" + std:
 		_logger.fatal("Unable to create ipv4 flow hash");
 		throw Poco::Exception("Unable to create ipv4 flow hash");
 	}
-	std::string ipv6_hash_name("ipv6_flow_hash_" + std::to_string(socket_id));
+	std::string ipv6_hash_name("ipv6_flow_hash_" + std::to_string(thread_id));
 	struct rte_hash_parameters ipv6_hash_params = {0};
-	ipv6_hash_params.entries = FLOW_HASH_ENTRIES;
+	ipv6_hash_params.entries = _flowHashSize;
 	ipv6_hash_params.key_len = sizeof(struct ipv6_5tuple);
 	ipv6_hash_params.hash_func = DEFAULT_HASH_FUNC;
 	ipv6_hash_params.hash_func_init_val = 0;

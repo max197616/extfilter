@@ -111,6 +111,8 @@ private:
 	struct CSender::params _sender_params;
 	
 	static uint64_t _tsc_hz;
+	uint32_t _flowhash_size;
+	uint32_t _flowhash_size_per_worker;
 };
 
 
