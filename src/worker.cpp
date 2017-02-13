@@ -14,7 +14,6 @@
 #include <iomanip>
 #include <rte_config.h>
 #include <rte_malloc.h>
-#include <rte_ring.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
 #include <rte_tcp.h>
@@ -26,6 +25,7 @@
 #include "main.h"
 #include "sendertask.h"
 #include "flow.h"
+#include "distributor.h"
 #include <rte_hash.h>
 
 #define tcphdr(x)	((struct tcphdr *)(x))
@@ -34,10 +34,12 @@
 
 static pcpp::PcapFileWriterDevice* pcapWriter = NULL;
 
-WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, struct rte_ring *iring, flowHash *fh) :
+WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, Distributor *distr, int worker_id) :
 		m_WorkerConfig(workerConfig), m_Stop(true), m_CoreId(MAX_NUM_OF_CORES+1),
 		_logger(Poco::Logger::get(name)),
-		ring(iring), m_FlowHash(fh)
+		 m_FlowHash(fh),
+		_distr(distr),
+		_worker_id(worker_id)
 {
 	ipv4_flows = (struct ndpi_flow_info **)calloc(fh->getHashSize(),sizeof(struct ndpi_flow_info *));
 	if(ipv4_flows == nullptr)
@@ -425,7 +427,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 					m_WorkerConfig.atmSSLDomains->search(ssl_client,false);
 					while(m_WorkerConfig.atmSSLDomains->findNext(match) && !found)
 					{
-						if(match.pattern.length != host_len)
+						if(match.pattern.ptext.length != host_len)
 						{
 							DomainsMatchType::Iterator it=m_WorkerConfig.SSLdomainsMatchType->find(match.id);
 							bool exact_match=false;
@@ -433,7 +435,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 								exact_match = it->second;
 							if(exact_match)
 								continue;
-							if(ssl_client[host_len-match.pattern.length-1] != '.')
+							if(ssl_client[host_len-match.pattern.ptext.length-1] != '.')
 								continue;
 						}
 						found=true;
@@ -485,143 +487,120 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		return false;
 	}
 
-	std::string host((char *)&flow_info->ndpi_flow->host_server_name);
-	if((flow_info->ndpi_flow->http.method == HTTP_METHOD_GET || flow_info->ndpi_flow->http.method == HTTP_METHOD_POST || flow_info->ndpi_flow->http.method == HTTP_METHOD_HEAD) && !host.empty())
+	if((flow_info->ndpi_flow->http.method == HTTP_METHOD_GET || flow_info->ndpi_flow->http.method == HTTP_METHOD_POST || flow_info->ndpi_flow->http.method == HTTP_METHOD_HEAD) && flow_info->ndpi_flow->http.url != NULL)
 	{
-		int dot_del=0;
-//		_logger.debug("Analyzing host %s", host);
-		if(m_WorkerConfig.atmDomains && !host.empty())
-		{
-			if(m_WorkerConfig.atmDomainsLock.tryLock())
-			{
-				if(host[host.length()-1] == '.')
-				{
-					dot_del=host.length()-1;
-					host.erase(dot_del,1);
-				}
-				if(m_WorkerConfig.lower_host)
-					std::transform(host.begin(), host.end(), host.begin(), ::tolower);
-#ifdef DEBUG_TIME
-				sw.reset();
-				sw.start();
-#endif
-				AhoCorasickPlus::Match match;
-				bool found=false;
-				{
-					m_WorkerConfig.atmDomains->search(host,false);
-					std::size_t host_len=host.length();
-					while(m_WorkerConfig.atmDomains->findNext(match) && !found)
-					{
-						if(match.pattern.length != host_len)
-						{
-							DomainsMatchType::Iterator it=m_WorkerConfig.domainsMatchType->find(match.id);
-							bool exact_match=false;
-							if(it != m_WorkerConfig.domainsMatchType->end())
-								exact_match = it->second;
-							if(exact_match)
-								continue;
-							if(host[host_len-match.pattern.length-1] != '.')
-								continue;
-						}
-						found=true;
-					}
-				}
-				m_WorkerConfig.atmDomainsLock.unlock();
-#ifdef DEBUG_TIME
-				sw.stop();
-				_logger.debug("Host %s seek occupied %ld us", host, sw.elapsed());
-#endif
-				if(found)
-				{
-					m_ThreadStats.matched_domains++;
-					_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, src_ip->toString(), dst_ip->toString());
-//					if (pcapWriter)
-//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
-					
-					if(m_WorkerConfig.http_redirect)
-					{
-						std::string add_param;
-						switch (m_WorkerConfig.add_p_type)
-						{
-							case A_TYPE_ID: add_param="id="+std::to_string(match.id);
-								break;
-							case A_TYPE_URL: add_param="url=http://"+host;
-								break;
-							default: break;
-						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
-						m_ThreadStats.redirected_domains++;
-					} else {
-						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
-						m_ThreadStats.sended_rst++;
-					}
-					return true;
-				}
-			}
-		}
-		std::string uri_o(flow_info->ndpi_flow->http.url ? flow_info->ndpi_flow->http.url : "");
-		if(m_WorkerConfig.atm && !uri_o.empty())
+		if(m_WorkerConfig.atm)
 		{
 			if(m_WorkerConfig.atmLock.tryLock())
 			{
+				std::string uri_o(flow_info->ndpi_flow->http.url ? flow_info->ndpi_flow->http.url : "");
 				std::string uri;
-				if(dot_del)
-					uri_o.erase(dot_del+7,1);
 				try
 				{
 					Poco::URI uri_p(uri_o);
 					uri_p.normalize();
 					uri.assign(uri_p.toString());
-/*					if(_config.url_decode)
-					{
-#ifdef __USE_POCO_URI_DECODE
-						Poco::URI::decode(uri_p.toString(),uri);
-#else
-						uri=url_decode(uri);
-#endif
-					}*/
 				} catch (Poco::SyntaxException &ex)
 				{
 					_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri_o);
 					uri.assign(uri_o);
+					std::transform(uri.begin(), uri.end(), uri.begin(), ::tolower);
+				}
+				// remove dot after domain...
+				size_t f_slash_pos=uri.find("/",10);
+				if(f_slash_pos != std::string::npos)
+				{
+					if(uri[f_slash_pos-1] == '.')
+						uri.erase(f_slash_pos-1,1);
 				}
 				AhoCorasickPlus::Match match;
 				bool found=false;
-				m_WorkerConfig.atm->search(uri,false);
+				size_t uri_length=uri.length() - 7;
+				char const *uri_ptr=uri.c_str() + 7;
+				m_WorkerConfig.atm->search((char *)uri_ptr, uri_length, false); // skip http://
+				EntriesData::Iterator it;
 				while(m_WorkerConfig.atm->findNext(match) && !found)
 				{
-					if(m_WorkerConfig.match_url_exactly && uri.length() != match.pattern.length)
-						continue;
+					it=m_WorkerConfig.entriesData->find(match.id);
+					if(match.pattern.ptext.length != uri_length)
+					{
+						int r=match.position-match.pattern.ptext.length;
+						if(it->second.type == E_TYPE_DOMAIN)
+						{
+							if(r > 0)
+							{
+								if(it->second.match_exactly)
+									continue;
+								if(*(uri_ptr+r-1) != '.')
+									continue;
+							}
+						} else if(it->second.type == E_TYPE_URL)
+						{
+							if(m_WorkerConfig.match_url_exactly)
+								continue;
+							if(r > 0)
+							{
+								if(*(uri_ptr+r-1) != '.')
+									continue;
+							}
+						}
+					}
 					found=true;
 				}
 				m_WorkerConfig.atmLock.unlock();
 				if(found)
 				{
-					m_ThreadStats.matched_urls++;
-					_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s", uri, match.id, src_ip->toString(), dst_ip->toString());
-//					if (pcapWriter)
-//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
-					if(m_WorkerConfig.http_redirect)
+					if(it->second.type == E_TYPE_DOMAIN) // block by domain...
 					{
-						std::string add_param;
-						switch (m_WorkerConfig.add_p_type)
+						m_ThreadStats.matched_domains++;
+//						_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, src_ip->toString(), dst_ip->toString());
+						if(m_WorkerConfig.http_redirect)
 						{
-							case A_TYPE_ID: add_param="id="+std::to_string(match.id);
-								break;
-							case A_TYPE_URL: add_param="url="+uri_o;
-								break;
-							default: break;
+							std::string add_param;
+							switch (m_WorkerConfig.add_p_type)
+							{
+								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
+									break;
+								case A_TYPE_URL: add_param="url="+uri_o;
+									break;
+								default: break;
+							}
+							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
+							m_ThreadStats.redirected_domains++;
+						} else {
+							std::string empty_str;
+							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+							m_ThreadStats.sended_rst++;
 						}
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
-						m_ThreadStats.redirected_urls++;
-					} else {
-						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
-						m_ThreadStats.sended_rst++;
+						return true;
+					} else if(it->second.type == E_TYPE_URL) // block by url...
+					{
+						m_ThreadStats.matched_urls++;
+//						_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s", uri, match.id, src_ip->toString(), dst_ip->toString());
+						if(m_WorkerConfig.http_redirect)
+						{
+							std::string add_param;
+							switch (m_WorkerConfig.add_p_type)
+							{
+								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
+									break;
+								case A_TYPE_URL: add_param="url="+uri_o;
+									break;
+								default: break;
+							}
+							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
+							m_ThreadStats.redirected_urls++;
+						} else {
+							std::string empty_str;
+							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+							m_ThreadStats.sended_rst++;
+						}
+						return true;
 					}
-					return true;
+
 				}
+
+
 			}
 		}
 	}
@@ -634,8 +613,7 @@ bool WorkerThread::run(uint32_t coreId)
 {
 	m_CoreId = coreId;
 	m_Stop = false;
-	uint16_t result;
-	struct rte_mbuf* mBufArray[EXTFILTER_WORKER_BURST_SIZE];
+	struct rte_mbuf *buf;
 
 	const uint64_t timeout = FLOW_IDLE_TIME * rte_get_timer_hz();
 
@@ -658,24 +636,24 @@ bool WorkerThread::run(uint32_t coreId)
 	// main loop, runs until be told to stop
 	while (!m_Stop)
 	{
-		cur_tsc = rte_rdtsc();
-		result = rte_ring_dequeue_burst(ring, (void **)mBufArray, EXTFILTER_WORKER_BURST_SIZE);
-		if (unlikely(result == 0))
+		rte_distributor_request_pkt(_distr->getDistributor(), _worker_id, NULL);
+		while((buf = rte_distributor_poll_pkt(_distr->getDistributor(), _worker_id)) == NULL)
+		{
+			if(m_Stop)
+				break;
+			rte_pause();
+		}
+		if (unlikely(buf == NULL))
 			continue;
+		cur_tsc = rte_rdtsc();
 		last_time = cur_tsc;
 
-		for (uint16_t j = 0; j < result; j++)
-		{
-			rte_prefetch0(rte_pktmbuf_mtod(mBufArray[j], void *));
-		}
+		rte_prefetch0(rte_pktmbuf_mtod(buf, void *));
 
 		// count received packets
-		m_ThreadStats.total_packets += result;
-		for (int i = 0; i < result; i++)
-		{
-			analyzePacket(mBufArray[i], last_time);
-			rte_pktmbuf_free(mBufArray[i]);
-		}
+		m_ThreadStats.total_packets++;
+		analyzePacket(buf, last_time);
+		rte_pktmbuf_free(buf);
 
 		diff_gc_tsc = cur_tsc - prev_gc_tsc;
 		if (unlikely(diff_gc_tsc >= gc_int_tsc))

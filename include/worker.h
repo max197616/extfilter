@@ -45,9 +45,6 @@ struct WorkerConfig
 	InputDataConfig InDataCfg;
 	AhoCorasickPlus *atm;
 	Poco::FastMutex atmLock; // для загрузки url
-	AhoCorasickPlus *atmDomains;
-	DomainsMatchType *domainsMatchType;
-	Poco::FastMutex atmDomainsLock; // для загрузки domains
 	AhoCorasickPlus *atmSSLDomains;
 	DomainsMatchType *SSLdomainsMatchType;
 	Poco::FastMutex atmSSLDomainsLock; // для загрузки domains
@@ -67,12 +64,12 @@ struct WorkerConfig
 	uint32_t max_ndpi_flows;
 	uint32_t num_roots;
 
+	EntriesData *entriesData;
+
 	WorkerConfig()
 	{
 		CoreId = MAX_NUM_OF_CORES+1;
 		atm = NULL;
-		atmDomains = NULL;
-		domainsMatchType = NULL;
 		atmSSLDomains = NULL;
 		SSLdomainsMatchType = NULL;
 		sslIPs = NULL;
@@ -93,6 +90,7 @@ struct WorkerConfig
 	}*/
 };
 
+class Distributor;
 
 class WorkerThread : public pcpp::DpdkWorkerThread
 {
@@ -106,8 +104,6 @@ private:
 
 	uint64_t last_time;
 
-	struct rte_ring *ring;
-
 	flowHash *m_FlowHash;
 
 	struct ndpi_flow_info **ipv4_flows;
@@ -115,12 +111,16 @@ private:
 
 	struct rte_mempool *flows_pool;
 
+	Distributor *_distr;
+
+	int _worker_id;
+
 	bool analyzePacket(pcpp::Packet &parsedPacket);
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
 	bool analyzePacketFlow(struct rte_mbuf *m, uint64_t timestamp);
 //	Flow *getFlow(Poco::Net::IPAddress *src_ip, Poco::Net::IPAddress *dst_ip, uint16_t src_port, uint8_t dst_port, uint8_t protocol, bool *src2dst_direction, time_t first_seen, time_t last_seen, bool *new_flow);
 public:
-	WorkerThread(const std::string& name, WorkerConfig &workerConfig, struct rte_ring *ring, flowHash *fh);
+	WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, Distributor *distr, int worker_id);
 
 	~WorkerThread();
 
@@ -164,11 +164,11 @@ private:
 	uint32_t m_CoreId;
 	Poco::Logger& _logger;
 	ThreadStats m_ThreadStats;
-	struct rte_ring *ring;
 	bool m_CanRun;
+	Distributor *_distr;
 public:
 
-	ReaderThread(const std::string& name, WorkerConfig &workerConfig, struct rte_ring *ring);
+	ReaderThread(const std::string& name, WorkerConfig &workerConfig, Distributor *distr);
 	~ReaderThread();
 
 	bool run(uint32_t coreId);

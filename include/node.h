@@ -1,8 +1,8 @@
 /*
- * node.h: automata node header file
+ * node.h: Defines the trie node and interface functions
  * This file is part of multifast.
  *
-    Copyright 2010-2013 Kamiar Kanani <kamiar.kanani@gmail.com>
+    Copyright 2010-2015 Kamiar Kanani <kamiar.kanani@gmail.com>
 
     multifast is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -24,51 +24,68 @@
 #include "actypes.h"
 
 #ifdef __cplusplus
-/*extern "C" {*/
+//extern "C" {
 #endif
 
 /* Forward Declaration */
-struct edge;
+struct act_edge;
+struct ac_trie;
 
-/* automata node */
-typedef struct AC_NODE
+/**
+ * Aho-Corasick Trie node 
+ */
+typedef struct act_node
 {
-    int id; /* Node ID : for debugging purpose */
-    short int final; /* 0: no ; 1: yes, it is a final node */
-    struct AC_NODE * failure_node; /* The failure node of this node */
-    unsigned short depth; /* depth: distance between this node and the root */
+    int id;     /**< Node identifier: used for debugging purpose */
+    
+    int final;      /**< A final node accepts pattern; 0: not, 1: is final */
+    size_t depth;   /**< Distance between this node and the root */
+    struct act_node *failure_node;  /**< The failure transition node */
+    
+    struct act_edge *outgoing;  /**< Outgoing edges array */
+    size_t outgoing_capacity;   /**< Max capacity of outgoing edges */
+    size_t outgoing_size;       /**< Number of outgoing edges */
+    
+    AC_PATTERN_t *matched;      /**< Matched patterns array */
+    size_t matched_capacity;    /**< Max capacity of the matched patterns */
+    size_t matched_size;        /**< Number of matched patterns in this node */
+    
+    AC_PATTERN_t *to_be_replaced;   /**< Pointer to the pattern that must be 
+                                     * replaced */
+    
+    struct ac_trie *trie;    /**< The trie that this node belongs to */
+    
+} ACT_NODE_t;
 
-    /* Matched patterns */
-    AC_PATTERN_t * matched_patterns; /* Array of matched patterns */
-    unsigned short matched_patterns_num; /* Number of matched patterns at this node */
-    unsigned short matched_patterns_max; /* Max capacity of allocated memory for matched_patterns */
-
-    /* Outgoing Edges */
-    struct edge * outgoing; /* Array of outgoing edges */
-    unsigned short outgoing_degree; /* Number of outgoing edges */
-    unsigned short outgoing_max; /* Max capacity of allocated memory for outgoing */
-} AC_NODE_t;
-
-/* The Edge of the Node */
-struct edge
+/**
+ * Edge of the node 
+ */
+struct act_edge
 {
-    AC_ALPHABET_t alpha; /* Edge alpha */
-    AC_NODE_t * next; /* Target of the edge */
+    AC_ALPHABET_t alpha;    /**< Transition alpha */
+    ACT_NODE_t *next;       /**< Target of the edge */
 };
 
+/*
+ * Node interface functions
+ */
 
-AC_NODE_t * node_create            (void);
-AC_NODE_t * node_create_next       (AC_NODE_t * thiz, AC_ALPHABET_t alpha);
-void        node_register_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * str);
-void        node_register_outgoing (AC_NODE_t * thiz, AC_NODE_t * next, AC_ALPHABET_t alpha);
-AC_NODE_t * node_find_next         (AC_NODE_t * thiz, AC_ALPHABET_t alpha);
-AC_NODE_t * node_findbs_next       (AC_NODE_t * thiz, AC_ALPHABET_t alpha);
-void        node_release           (AC_NODE_t * thiz);
-void        node_assign_id         (AC_NODE_t * thiz);
-void        node_sort_edges        (AC_NODE_t * thiz);
+ACT_NODE_t *node_create (struct ac_trie *trie);
+ACT_NODE_t *node_create_next (ACT_NODE_t *nod, AC_ALPHABET_t alpha);
+ACT_NODE_t *node_find_next (ACT_NODE_t *nod, AC_ALPHABET_t alpha);
+ACT_NODE_t *node_find_next_bs (ACT_NODE_t *nod, AC_ALPHABET_t alpha);
+
+void node_assign_id (ACT_NODE_t *nod);
+void node_add_edge (ACT_NODE_t *nod, ACT_NODE_t *next, AC_ALPHABET_t alpha);
+void node_sort_edges (ACT_NODE_t *nod);
+void node_accept_pattern (ACT_NODE_t *nod, AC_PATTERN_t *new_patt, int copy);
+void node_collect_matches (ACT_NODE_t *nod);
+void node_release_vectors (ACT_NODE_t *nod);
+int  node_book_replacement (ACT_NODE_t *nod);
+void node_display (ACT_NODE_t *nod);
 
 #ifdef __cplusplus
-/*}*/
+//}
 #endif
 
 #endif

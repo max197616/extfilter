@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.2, max1976@mail.ru)
+AC_INIT(extFilter, 0.3, max1976@mail.ru)
 
 PPP_HOME=./PcapPlusPlus
 DPDK_HOME=

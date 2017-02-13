@@ -25,39 +25,55 @@
 
 AhoCorasickPlus::AhoCorasickPlus ()
 {
-    m_automata = ac_automata_init ();
+    m_automata = ac_trie_create ();
     m_acText = new AC_TEXT_t;
 }
 
 AhoCorasickPlus::~AhoCorasickPlus ()
 {
-    ac_automata_release (m_automata);
+    ac_trie_release (m_automata);
     delete m_acText;
 }
 
-AhoCorasickPlus::EnumReturnStatus AhoCorasickPlus::addPattern (const std::string &pattern, PatternId id)
+AhoCorasickPlus::EnumReturnStatus AhoCorasickPlus::addPattern 
+    (const std::string &pattern, PatternId id)
 {
+    // Adds zero-terminating string
+    
     EnumReturnStatus rv = RETURNSTATUS_FAILED;
-
-    AC_PATTERN_t tmp_patt;
-    tmp_patt.astring = (AC_ALPHABET_t*) pattern.c_str();
-    tmp_patt.length = pattern.size();
-    tmp_patt.rep.number = id;
-
-    AC_STATUS_t status = ac_automata_add (m_automata, &tmp_patt);
+    
+    AC_PATTERN_t patt;
+    patt.ptext.astring = (AC_ALPHABET_t*) pattern.c_str();
+    patt.ptext.length = pattern.size();
+    patt.id.u.number = id;
+    patt.rtext.astring = NULL;
+    patt.rtext.length = 0;
+    
+    AC_STATUS_t status = ac_trie_add (m_automata, &patt, 0);
     
     switch (status)
     {
-        case ACERR_SUCCESS:             rv = RETURNSTATUS_SUCCESS; break;
-        case ACERR_DUPLICATE_PATTERN:   rv = RETURNSTATUS_DUPLICATE_PATTERN; break;
-        case ACERR_LONG_PATTERN:        rv = RETURNSTATUS_LONG_PATTERN; break;
-        case ACERR_ZERO_PATTERN:        rv = RETURNSTATUS_ZERO_PATTERN; break;
-        case ACERR_AUTOMATA_CLOSED:     rv = RETURNSTATUS_AUTOMATA_CLOSED; break;
+        case ACERR_SUCCESS: 
+            rv = RETURNSTATUS_SUCCESS; 
+            break;
+        case ACERR_DUPLICATE_PATTERN:
+            rv = RETURNSTATUS_DUPLICATE_PATTERN; 
+            break;
+        case ACERR_LONG_PATTERN: 
+            rv = RETURNSTATUS_LONG_PATTERN; 
+            break;
+        case ACERR_ZERO_PATTERN: 
+            rv = RETURNSTATUS_ZERO_PATTERN; 
+            break;
+        case ACERR_TRIE_CLOSED: 
+            rv = RETURNSTATUS_AUTOMATA_CLOSED; 
+            break;
     }
     return rv;
 }
 
-AhoCorasickPlus::EnumReturnStatus AhoCorasickPlus::addPattern (const char pattern[], PatternId id)
+AhoCorasickPlus::EnumReturnStatus AhoCorasickPlus::addPattern 
+    (const char pattern[], PatternId id)
 {
     std::string tmpString = pattern;
     return addPattern (tmpString, id);
@@ -65,47 +81,53 @@ AhoCorasickPlus::EnumReturnStatus AhoCorasickPlus::addPattern (const char patter
 
 void AhoCorasickPlus::finalize ()
 {
-    ac_automata_finalize (m_automata);
+    ac_trie_finalize (m_automata);
 }
 
 void AhoCorasickPlus::search (std::string& text, bool keep)
 {
     m_acText->astring = text.c_str();
     m_acText->length = text.size();
-    ac_automata_settext (m_automata, m_acText, (int)keep);
+    ac_trie_settext (m_automata, m_acText, (int)keep);
+}
+
+void AhoCorasickPlus::search (char *text, int text_length,  bool keep)
+{
+    m_acText->astring = text;
+    m_acText->length = text_length;
+    ac_trie_settext(m_automata, m_acText, (int)keep);
 }
 
 bool AhoCorasickPlus::findNext (Match& match)
 {
-    if (m_matchQueue.size()>0)
+    if (m_matchQueue.size() > 0)
     {
         match = m_matchQueue.front();
         m_matchQueue.pop();
         return true;
     }
     
-    AC_MATCH_t * matchp;
+    AC_MATCH_t matchp;
     
-    if ((matchp = ac_automata_findnext (m_automata)))
+    if ((matchp = ac_trie_findnext (m_automata)).size)
     {
         Match singleMatch;
-        singleMatch.position = matchp->position;
+        singleMatch.position = matchp.position;
         
-        for (unsigned int j=0; j < matchp->match_num; j++)
+        for (unsigned int j = 0; j < matchp.size; j++)
         {
-            singleMatch.id = matchp->patterns[j].rep.number;
-	    singleMatch.pattern = matchp->patterns[j];
-            // we ignore tmp_patt.astring it may have been invalidated
+            singleMatch.id = matchp.patterns[j].id.u.number;
+	    singleMatch.pattern = matchp.patterns[j];
             m_matchQueue.push(singleMatch);
         }
     }
     
-    if (m_matchQueue.size()>0)
+    if (m_matchQueue.size() > 0)
     {
         match = m_matchQueue.front();
         m_matchQueue.pop();
         return true;
     }
-
+    
     return false;
 }

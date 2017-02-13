@@ -2,17 +2,17 @@
 #include <rte_config.h>
 #include <rte_common.h>
 #include <rte_ethdev.h>
-#include <rte_ring.h>
 
 
 #include "worker.h"
 #include "main.h"
+#include "distributor.h"
 
-ReaderThread::ReaderThread(const std::string& name, WorkerConfig &workerConfig, struct rte_ring *iring) :
+ReaderThread::ReaderThread(const std::string& name, WorkerConfig &workerConfig, Distributor *distr) :
 		m_WorkerConfig(workerConfig), m_Stop(true), m_CoreId(MAX_NUM_OF_CORES+1),
 		_logger(Poco::Logger::get(name)),
-		ring(iring),
-		m_CanRun(false)
+		m_CanRun(false),
+		_distr(distr)
 {
 }
 
@@ -25,7 +25,6 @@ bool ReaderThread::run(uint32_t coreId)
 	m_CoreId = coreId;
 	m_Stop = false;
 	uint16_t nb_rx;
-	uint16_t nb_rx_enqueued;
 	struct rte_mbuf *bufs[EXTFILTER_CAPTURE_BURST_SIZE];
 
 	if (m_WorkerConfig.InDataCfg.size() == 0)
@@ -51,24 +50,16 @@ bool ReaderThread::run(uint32_t coreId)
 				nb_rx = rte_eth_rx_burst(dev->getDeviceId(), *iter2, bufs, EXTFILTER_CAPTURE_BURST_SIZE);
 				if (likely(nb_rx > 0))
 				{
-					nb_rx_enqueued = rte_ring_enqueue_burst(ring,(void* const*) bufs, nb_rx);
-					/* Update stats */
+					rte_distributor_process(_distr->getDistributor(), bufs, nb_rx);
 					m_ThreadStats.total_packets += nb_rx;
-					m_ThreadStats.enqueued_packets += nb_rx_enqueued;
-					m_ThreadStats.missed_packets += nb_rx-nb_rx_enqueued;
-//					if(rte_ring_count(ring)/4096*100 > 50)
-//						_logger.warning("Queue filled more than 50%");
-					if(nb_rx_enqueued < nb_rx)
-						_logger.information("Missed %d packets, total %d packets, packets in ring %d", (int) (nb_rx-nb_rx_enqueued), (int)m_ThreadStats.missed_packets, (int) rte_ring_count(ring));
-					/* Free whatever we can't put in the write ring */
-					while(nb_rx_enqueued < nb_rx)
-					{
-						rte_pktmbuf_free(bufs[nb_rx_enqueued++]);
-				        }
+					m_ThreadStats.enqueued_packets += nb_rx;
 				}
 			}
 		}
 	}
+	rte_distributor_process(_distr->getDistributor(), NULL, 0);
+	/* flush distributor to bring to known state */
+	_distr->flush();
 	_logger.debug("Reader thread on core %u terminated", coreId);
 	return true;
 }

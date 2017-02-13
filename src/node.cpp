@@ -1,8 +1,8 @@
 /*
- * node.c: implementation of automata node
+ * node.c: Implements the A.C. Trie node
  * This file is part of multifast.
  *
-    Copyright 2010-2013 Kamiar Kanani <kamiar.kanani@gmail.com>
+    Copyright 2010-2015 Kamiar Kanani <kamiar.kanani@gmail.com>
 
     multifast is free software: you can redistribute it and/or modify
     it under the terms of the GNU Lesser General Public License as published by
@@ -21,234 +21,474 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "node.h"
+#include "mpool.h"
+#include "ahocorasick.h"
 
-/* reallocation step for AC_NODE_t.matched_patterns */
-#define REALLOC_CHUNK_MATCHSTR 1
+/* Privates */
+static void node_init (ACT_NODE_t *thiz);
+static int  node_edge_compare (const void *l, const void *r);
+static int  node_has_pattern (ACT_NODE_t *thiz, AC_PATTERN_t *patt);
+static void node_grow_outgoing_vector (ACT_NODE_t *thiz);
+static void node_grow_matched_vector (ACT_NODE_t *thiz);
+static void node_copy_pattern (ACT_NODE_t *thiz, 
+        AC_PATTERN_t *to, AC_PATTERN_t *from);
 
-/* reallocation step for AC_NODE_t.outgoing array */
-#define REALLOC_CHUNK_OUTGOING 1
-/* For different node depth, number of outgoing edges differs considerably 
- * if you care about preprocessing speed, you can set a higher value for 
- * reallocation step size to prevent multiple reallocations.
- */
-
-/* Private function prototype */
-static  void node_init         (AC_NODE_t * thiz);
-static int  node_edge_compare (const void * l, const void * r);
-static int  node_has_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * newstr);
-
-
-/******************************************************************************
- * FUNCTION: node_create
- * Create the node
+/**
+ * @brief Creates the node
+ * 
+ * @return 
 ******************************************************************************/
-struct AC_NODE * node_create(void)
+struct act_node * node_create (struct ac_trie *trie)
 {
-    AC_NODE_t * thiz;
-    thiz = (AC_NODE_t *) malloc (sizeof(AC_NODE_t));
-    node_init(thiz);
-    node_assign_id(thiz);
-    return thiz;
+    ACT_NODE_t *node;
+    
+    node = (ACT_NODE_t *) mpool_malloc (trie->mp, sizeof(ACT_NODE_t));
+    node_init (node);
+    node->trie = trie;
+    
+    return node;
 }
 
-/******************************************************************************
- * FUNCTION: node_init
- * Initialize node
-******************************************************************************/
-void node_init(AC_NODE_t * thiz)
+/**
+ * @brief Initializes the node
+ * 
+ * @param thiz 
+ *****************************************************************************/
+static void node_init (ACT_NODE_t *thiz)
 {
-    memset(thiz, 0, sizeof(AC_NODE_t));
-
-    thiz->outgoing_max = REALLOC_CHUNK_OUTGOING;
-    thiz->outgoing = (struct edge *) malloc
-            (thiz->outgoing_max*sizeof(struct edge));
-
-    thiz->matched_patterns_max = REALLOC_CHUNK_MATCHSTR;
-    thiz->matched_patterns = (AC_PATTERN_t *) malloc
-            (thiz->matched_patterns_max*sizeof(AC_PATTERN_t));
+    node_assign_id (thiz);
+    
+    thiz->final = 0;
+    thiz->failure_node = NULL;
+    thiz->depth = 0;
+    
+    thiz->matched = NULL;
+    thiz->matched_capacity = 0;
+    thiz->matched_size = 0;
+    
+    thiz->outgoing = NULL;
+    thiz->outgoing_capacity = 0;
+    thiz->outgoing_size = 0;
+    
+    thiz->to_be_replaced = NULL;
 }
 
-/******************************************************************************
- * FUNCTION: node_release
- * Release node
-******************************************************************************/
-void node_release(AC_NODE_t * thiz)
+/**
+ * @brief Releases the node memories
+ * 
+ * @param thiz
+ *****************************************************************************/
+void node_release_vectors(ACT_NODE_t *nod)
 {
-    free(thiz->matched_patterns);
-    free(thiz->outgoing);
-    free(thiz);
+    free(nod->matched);
+    free(nod->outgoing);
 }
 
-/******************************************************************************
- * FUNCTION: node_find_next
- * Find out the next node for a given Alpha to move. this function is used in
+/**
+ * @brief Finds out the next node for a given alpha. this function is used in
  * the pre-processing stage in which edge array is not sorted. so it uses
  * linear search.
-******************************************************************************/
-AC_NODE_t * node_find_next(AC_NODE_t * thiz, AC_ALPHABET_t alpha)
+ * 
+ * @param thiz
+ * @param alpha
+ * @return 
+ *****************************************************************************/
+ACT_NODE_t * node_find_next(ACT_NODE_t *nod, AC_ALPHABET_t alpha)
 {
-    int i;
-
-    for (i=0; i < thiz->outgoing_degree; i++)
+    size_t i;
+    
+    for (i=0; i < nod->outgoing_size; i++)
     {
-        if(thiz->outgoing[i].alpha == alpha)
-            return (thiz->outgoing[i].next);
+        if(nod->outgoing[i].alpha == alpha)
+            return (nod->outgoing[i].next);
     }
     return NULL;
 }
 
-/******************************************************************************
- * FUNCTION: node_findbs_next
- * Find out the next node for a given Alpha. this function is used after the
- * pre-processing stage in which we sort edges. so it uses Binary Search.
-******************************************************************************/
-AC_NODE_t * node_findbs_next (AC_NODE_t * thiz, AC_ALPHABET_t alpha)
+/**
+ * @brief Finds out the next node for a given alpha. this function is used 
+ * after the pre-processing stage in which we sort edges. so it uses Binary 
+ * Search.
+ * 
+ * @param thiz
+ * @param alpha
+ * @return 
+ *****************************************************************************/
+ACT_NODE_t *node_find_next_bs (ACT_NODE_t *nod, AC_ALPHABET_t alpha)
 {
-    int min, max, mid;
+    size_t mid;
+    int min, max;
     AC_ALPHABET_t amid;
 
     min = 0;
-    max = thiz->outgoing_degree - 1;
+    max = nod->outgoing_size - 1;
 
     while (min <= max)
     {
-        mid = (min+max) >> 1;
-        amid = thiz->outgoing[mid].alpha;
+        mid = (min + max) >> 1;
+        amid = nod->outgoing[mid].alpha;
         if (alpha > amid)
             min = mid + 1;
         else if (alpha < amid)
             max = mid - 1;
         else
-            return (thiz->outgoing[mid].next);
+            return (nod->outgoing[mid].next);
     }
     return NULL;
 }
 
-/******************************************************************************
- * FUNCTION: node_has_matchstr
- * Determine if a final node contains a pattern in its accepted pattern list
- * or not. return values: 1 = it has, 0 = it hasn't
-******************************************************************************/
-int node_has_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * newstr)
+/**
+ * @brief Determines if a final node contains a pattern in its accepted pattern
+ * list or not.
+ * 
+ * @param thiz
+ * @param newstr
+ * @return 1: has the pattern, 0: doesn't have it
+ *****************************************************************************/
+static int node_has_pattern (ACT_NODE_t *thiz, AC_PATTERN_t *patt)
 {
-    int i, j;
-    AC_PATTERN_t * str;
-
-    for (i=0; i < thiz->matched_patterns_num; i++)
+    size_t i, j;
+    AC_TEXT_t *txt;
+    AC_TEXT_t *new_txt = &patt->ptext;
+    
+    for (i = 0; i < thiz->matched_size; i++)
     {
-        str = &thiz->matched_patterns[i];
-
-        if (str->length != newstr->length)
+        txt = &thiz->matched[i].ptext;
+        
+        if (txt->length != new_txt->length)
             continue;
-
-        for (j=0; j<str->length; j++)
-            if(str->astring[j] != newstr->astring[j])
-                continue;
-
-        if (j == str->length)
+        
+        /* The following loop is futile! Because the input pattern always come 
+         * from a failure node, and if they have the same length, then they are
+         * equal. But for the sake of functional integrity we leave it here. */
+        
+        for (j = 0; j < txt->length; j++)
+            if (txt->astring[j] != new_txt->astring[j])
+                break;
+        
+        if (j == txt->length)
             return 1;
     }
     return 0;
 }
 
-/******************************************************************************
- * FUNCTION: node_create_next
- * Create the next node for the given alpha.
-******************************************************************************/
-AC_NODE_t * node_create_next (AC_NODE_t * thiz, AC_ALPHABET_t alpha)
+/**
+ * @brief Create the next node for the given alpha.
+ * 
+ * @param thiz
+ * @param alpha
+ * @return 
+ *****************************************************************************/
+ACT_NODE_t *node_create_next (ACT_NODE_t *nod, AC_ALPHABET_t alpha)
 {
-    AC_NODE_t * next;
-    next = node_find_next (thiz, alpha);
-    if (next)
-    /* The edge already exists */
+    ACT_NODE_t *next;
+    
+    if (node_find_next (nod, alpha) != NULL)
+        /* The edge already exists */
         return NULL;
-    /* Otherwise register new edge */
-    next = node_create ();
-    node_register_outgoing(thiz, next, alpha);
-
+    
+    next = node_create (nod->trie);
+    node_add_edge (nod, next, alpha);
+    
     return next;
 }
 
-/******************************************************************************
- * FUNCTION: node_register_matchstr
- * Adds the pattern to the list of accepted pattern.
-******************************************************************************/
-void node_register_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * str)
+/**
+ * @brief Adds the pattern to the list of accepted pattern.
+ * 
+ * @param thiz
+ * @param str
+ * @param copy
+ *****************************************************************************/
+void node_accept_pattern (ACT_NODE_t *nod, AC_PATTERN_t *new_patt, int copy)
 {
+    AC_PATTERN_t *patt;
+    
     /* Check if the new pattern already exists in the node list */
-    if (node_has_matchstr(thiz, str))
+    if (node_has_pattern(nod, new_patt))
         return;
-
+    
     /* Manage memory */
-    if (thiz->matched_patterns_num >= thiz->matched_patterns_max)
+    if (nod->matched_size == nod->matched_capacity)
+        node_grow_matched_vector (nod);
+    
+    patt = &nod->matched[nod->matched_size++];
+    
+    if (copy)
     {
-        thiz->matched_patterns_max += REALLOC_CHUNK_MATCHSTR;
-        thiz->matched_patterns = (AC_PATTERN_t *) realloc 
-            (thiz->matched_patterns, thiz->matched_patterns_max*sizeof(AC_PATTERN_t));
+        /* Deep copy */
+        node_copy_pattern (nod, patt, new_patt);
     }
-
-    thiz->matched_patterns[thiz->matched_patterns_num].astring = str->astring;
-    thiz->matched_patterns[thiz->matched_patterns_num].length = str->length;
-    thiz->matched_patterns[thiz->matched_patterns_num].rep = str->rep;
-    thiz->matched_patterns_num++;
+    else
+    {
+        /* Shallow copy */
+        *patt = *new_patt;
+    }
 }
 
-/******************************************************************************
- * FUNCTION: node_register_outgoing
- * Establish an edge between two nodes
-******************************************************************************/
-void node_register_outgoing
-    (AC_NODE_t * thiz, AC_NODE_t * next, AC_ALPHABET_t alpha)
+/**
+ * @brief Makes a deep copy of the pattern
+ * 
+ * @param thiz pointer to the owner node
+ * @param from 
+ * @param to
+ *****************************************************************************/
+static void node_copy_pattern
+    (ACT_NODE_t *thiz, AC_PATTERN_t *to, AC_PATTERN_t *from)
 {
-    if(thiz->outgoing_degree >= thiz->outgoing_max)
-    {
-        thiz->outgoing_max += REALLOC_CHUNK_OUTGOING;
-        thiz->outgoing = (struct edge *) realloc 
-            (thiz->outgoing, thiz->outgoing_max*sizeof(struct edge));
-    }
-
-    thiz->outgoing[thiz->outgoing_degree].alpha = alpha;
-    thiz->outgoing[thiz->outgoing_degree++].next = next;
+    struct mpool *mp = thiz->trie->mp;
+    
+    to->ptext.astring = (AC_ALPHABET_t *) mpool_strndup (mp, 
+        (const char *) from->ptext.astring, 
+        from->ptext.length * sizeof(AC_ALPHABET_t));
+    to->ptext.length = from->ptext.length;
+    
+    to->rtext.astring = (AC_ALPHABET_t *) mpool_strndup (mp, 
+        (const char *) from->rtext.astring, 
+        from->rtext.length * sizeof(AC_ALPHABET_t));
+    to->rtext.length = from->rtext.length;
+    
+    if (from->id.type == AC_PATTID_TYPE_STRING)
+        to->id.u.stringy = (const char *) mpool_strdup (mp, 
+                (const char *) from->id.u.stringy);
+    else
+        to->id.u.number = from->id.u.number;
+    
+    to->id.type = from->id.type;
 }
 
-/******************************************************************************
- * FUNCTION: node_assign_id
- * assign a unique ID to the node (used for debugging purpose).
-******************************************************************************/
-void node_assign_id (AC_NODE_t * thiz)
+/**
+ * @brief Establish an edge between two nodes
+ * 
+ * @param thiz
+ * @param next
+ * @param alpha
+ *****************************************************************************/
+void node_add_edge (ACT_NODE_t *nod, ACT_NODE_t *next, AC_ALPHABET_t alpha)
+{
+    struct act_edge *oe; /* Outgoing edge */
+    
+    if(nod->outgoing_size == nod->outgoing_capacity)
+        node_grow_outgoing_vector (nod);
+    
+    oe = &nod->outgoing[nod->outgoing_size];
+    oe->alpha = alpha;
+    oe->next = next;
+    nod->outgoing_size++;
+}
+
+/**
+ * @brief Assigns a unique ID to the node (used for debugging purpose)
+ * 
+ * @param thiz
+ *****************************************************************************/
+void node_assign_id (ACT_NODE_t *nod)
 {
     static int unique_id = 1;
-    thiz->id = unique_id ++;
+    nod->id = unique_id++;
 }
 
-/******************************************************************************
- * FUNCTION: node_edge_compare
- * Comparison function for qsort. see man qsort.
-******************************************************************************/
-int node_edge_compare (const void * l, const void * r)
+/**
+ * @brief Comparison function for qsort. see man qsort.
+ * 
+ * @param l left side
+ * @param r right side
+ * @return According to the man page: The comparison function must return an 
+ * integer less than, equal to, or greater than zero if the first argument is 
+ * considered to be respectively less than, equal to, or greater than the 
+ * second. if two members compare as equal, their order in the sorted array is 
+ * undefined.
+ *****************************************************************************/
+static int node_edge_compare (const void *l, const void *r)
 {
-    /* According to man page:
-     * The comparison function must return an integer less than, equal to, or
-     * greater than zero if the first argument is considered to be
-     * respectively less than, equal to, or greater than the second. if  two
-     * members compare as equal, their order in the sorted array is undefined.
-     *
+    /* 
      * NOTE: Because edge alphabets are unique in every node we ignore
      * equivalence case.
-    **/
-    if ( ((struct edge *)l)->alpha >= ((struct edge *)r)->alpha )
+     */
+    if (((struct act_edge *)l)->alpha >= ((struct act_edge *)r)->alpha)
         return 1;
     else
         return -1;
 }
 
-/******************************************************************************
- * FUNCTION: node_sort_edges
- * sorts edges alphabets.
-******************************************************************************/
-void node_sort_edges (AC_NODE_t * thiz)
+/**
+ * @brief Sorts edges alphabets.
+ * 
+ * @param thiz
+ *****************************************************************************/
+void node_sort_edges (ACT_NODE_t *nod)
 {
-    qsort ((void *)thiz->outgoing, thiz->outgoing_degree, sizeof(struct edge),
-            node_edge_compare);
+    qsort ((void *)nod->outgoing, nod->outgoing_size, 
+            sizeof(struct act_edge), node_edge_compare);
+}
+
+/**
+ * @brief Bookmarks the to-be-replaced patterns
+ * 
+ * If there was more than one pattern accepted in a node then only one of them
+ * must be replaced: The longest pattern that has a requested replacement.
+ * 
+ * @param node
+ * @return 1 if there was any replacement, 0 otherwise
+ *****************************************************************************/
+int node_book_replacement (ACT_NODE_t *nod)
+{
+    size_t j;
+    AC_PATTERN_t *pattern;
+    AC_PATTERN_t *longest = NULL;
+    
+    if(!nod->final)
+        return 0;
+
+    for (j=0; j < nod->matched_size; j++)
+    {
+        pattern = &nod->matched[j];
+        
+        if (pattern->rtext.astring != NULL)
+        {
+            if (!longest)
+                longest = pattern;
+            else if (pattern->ptext.length > longest->ptext.length)
+                longest = pattern;
+        }
+    }
+    
+    nod->to_be_replaced = longest;
+    
+    return longest ? 1 : 0;
+}
+
+/**
+ * @brief Grows the size of outgoing edges vector
+ * 
+ * @param thiz
+ *****************************************************************************/
+static void node_grow_outgoing_vector (ACT_NODE_t *thiz)
+{
+    const size_t grow_factor = (8 / (thiz->depth + 1)) + 1;
+    
+    /* The outgoing edges of nodes grow with different pace in different
+     * depths; the shallower nodes the bigger outgoing number of nodes.
+     * So for efficiency (speed & memory usage), we apply a measure to 
+     * manage different growth rate.
+     */
+    
+    if (thiz->outgoing_capacity == 0)
+    {
+        thiz->outgoing_capacity = grow_factor;
+        thiz->outgoing = (struct act_edge *) malloc 
+                (thiz->outgoing_capacity * sizeof(struct act_edge));
+    }
+    else
+    {
+        thiz->outgoing_capacity += grow_factor;
+        thiz->outgoing = (struct act_edge *) realloc (
+                thiz->outgoing, 
+                thiz->outgoing_capacity * sizeof(struct act_edge));
+    }
+}
+
+/**
+ * @brief Grows the size of matched patterns vector
+ * 
+ * @param thiz
+ *****************************************************************************/
+static void node_grow_matched_vector (ACT_NODE_t *thiz)
+{
+    if (thiz->matched_capacity == 0)
+    {
+        thiz->matched_capacity = 1;
+        thiz->matched = (AC_PATTERN_t *) malloc 
+                (thiz->matched_capacity * sizeof(AC_PATTERN_t));
+    }
+    else
+    {
+        thiz->matched_capacity += 2;
+        thiz->matched = (AC_PATTERN_t *) realloc (
+                thiz->matched,
+                thiz->matched_capacity * sizeof(AC_PATTERN_t));
+    }
+}
+
+/**
+ * @brief Collect accepted patterns of the node.
+ * 
+ * The accepted patterns consist of the node's own accepted pattern plus 
+ * accepted patterns of its failure node.
+ * 
+ * @param node
+ *****************************************************************************/
+void node_collect_matches (ACT_NODE_t *nod)
+{
+    size_t i;
+    ACT_NODE_t *n = nod;
+    
+    while ((n = n->failure_node))
+    {
+        for (i = 0; i < n->matched_size; i++)
+            /* Always call with copy parameter 0 */
+            node_accept_pattern (nod, &(n->matched[i]), 0);
+        
+        if (n->final)
+            nod->final = 1;
+    }
+    
+    node_sort_edges (nod);
+    /* Sort matched patterns? Is that necessary? I don't think so. */
+}
+
+/**
+ * @brief Displays all nodes recursively
+ * 
+ * @param n
+ * @param repcast
+ *****************************************************************************/
+void node_display (ACT_NODE_t *nod)
+{
+    size_t j;
+    struct act_edge *e;
+    AC_PATTERN_t patt;
+    
+    printf("NODE(%3d)/....fail....> ", nod->id);
+    if (nod->failure_node)
+        printf("NODE(%3d)\n", nod->failure_node->id);
+    else
+        printf ("N.A.\n");
+    
+    for (j = 0; j < nod->outgoing_size; j++)
+    {
+        e = &nod->outgoing[j];
+        printf("         |----(");
+        if(isgraph(e->alpha))
+            printf("%c)---", e->alpha);
+        else
+            printf("0x%x)", e->alpha);
+        printf("--> NODE(%3d)\n", e->next->id);
+    }
+
+    if (nod->matched_size)
+    {
+        printf("Accepts: {");
+        for (j = 0; j < nod->matched_size; j++)
+        {
+            patt = nod->matched[j];
+            if(j) 
+                printf(", ");
+            switch (patt.id.type)
+            {
+            case AC_PATTID_TYPE_DEFAULT:
+            case AC_PATTID_TYPE_NUMBER:
+                printf("%ld", patt.id.u.number);
+                break;
+            case AC_PATTID_TYPE_STRING:
+                printf("%s", patt.id.u.stringy);
+                break;
+            }
+            printf(": %.*s", (int)patt.ptext.length, patt.ptext.astring);
+        }
+        printf("}\n");
+    }
+    printf("\n");
 }

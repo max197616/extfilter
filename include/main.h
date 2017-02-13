@@ -51,6 +51,12 @@ public:
 	**/
 	void loadHosts(std::string &fn, IPPortMap *ippm, Patricia *patricia);
 
+
+	/**
+	    Load domains and urls into one database.
+	**/
+	void loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm, EntriesData *ed);
+
 	std::string &getSSLFile()
 	{
 		return _sslFile;

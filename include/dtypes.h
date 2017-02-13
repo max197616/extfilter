@@ -7,6 +7,22 @@
 #include <set>
 #include <vector>
 
+enum entry_types
+{
+	E_TYPE_DOMAIN,
+	E_TYPE_URL
+};
+
+struct entry_data
+{
+	uint32_t lineno;
+	entry_types type;
+	bool match_exactly;
+};
+
+
+typedef Poco::HashMap<unsigned int, struct entry_data> EntriesData;
+
 typedef Poco::HashMap<unsigned int,bool> DomainsMatchType;
 
 typedef std::map<pcpp::DpdkDevice*, std::vector<int> > InputDataConfig;

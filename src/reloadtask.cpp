@@ -58,6 +58,7 @@ void ReloadTask::runTask()
 				DomainsMatchType *to_del_dm;
 				AhoCorasickPlus *atm_new;
 				DomainsMatchType *dm_new;
+				EntriesData *datas_new;
 				if(!_parent->getSSLFile().empty())
 				{
 					atm_new = new AhoCorasickPlus();
@@ -82,47 +83,29 @@ void ReloadTask::runTask()
 						delete dm_new;
 					}
 				}
-				if(!_parent->getDomainsFile().empty())
+				if(!_parent->getDomainsFile().empty() && !_parent->getURLsFile().empty())
 				{
 					atm_new = new AhoCorasickPlus();
-					dm_new = new DomainsMatchType;
+					datas_new = new EntriesData();
+					EntriesData *datas_del;
 					try
 					{
-						_parent->loadDomains(_parent->getDomainsFile(),atm_new,dm_new);
-						atm_new->finalize();
-						config.atmDomainsLock.lock();
-						to_del_atm = config.atmDomains;
-						to_del_dm = config.domainsMatchType;
-						config.atmDomains = atm_new;
-						config.domainsMatchType = dm_new;
-						config.atmDomainsLock.unlock();
-						delete to_del_atm;
-						delete to_del_dm;
-					_logger.information("Reloaded data for domains list for core %u", (*it)->getCoreId());
-					} catch (Poco::Exception &excep)
-					{
-						_logger.error("Got exception while reload domains data: %s", excep.displayText());
-						delete atm_new;
-						delete dm_new;
-					}
-				}
-				if(!_parent->getURLsFile().empty())
-				{
-					atm_new = new AhoCorasickPlus();
-					try
-					{
-						_parent->loadURLs(_parent->getURLsFile(),atm_new);
+						_parent->loadDomainsURLs(_parent->getDomainsFile(), _parent->getURLsFile(), atm_new, datas_new);
 						atm_new->finalize();
 						config.atmLock.lock();
 						to_del_atm = config.atm;
 						config.atm = atm_new;
+						datas_del = config.entriesData;
+						config.entriesData = datas_new;
 						config.atmLock.unlock();
 						delete to_del_atm;
-						_logger.information("Reloaded data for urls list for core %u", (*it)->getCoreId());
+						delete datas_del;
+						_logger.information("Reloaded data for domains and urls list for core %u", (*it)->getCoreId());
 					} catch (Poco::Exception &excep)
 					{
-						_logger.error("Got exception while reload urls data: %s", excep.displayText());
+						_logger.error("Got exception while reload domains and urls data: %s", excep.displayText());
 						delete atm_new;
+						delete datas_new;
 					}
 				}
 				if(!_parent->getHostsFile().empty())

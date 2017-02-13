@@ -11,8 +11,8 @@
 #include <SSLLayer.h>
 #include <rte_config.h>
 #include <rte_malloc.h>
-#include <rte_ring.h>
 #include <rte_cycles.h>
+#include <rte_ethdev.h>
 
 #include <iostream>
 #include <vector>
@@ -25,9 +25,7 @@
 #include "sendertask.h"
 #include "statistictask.h"
 #include "reloadtask.h"
-
-
-static struct rte_ring *worker_ring;
+#include "distributor.h"
 
 uint64_t extFilter::_tsc_hz;
 
@@ -160,7 +158,6 @@ void extFilter::initialize(Application& self)
 	}
 
 	_coreMaskToUse=config().getInt("core_mask", pcpp::getCoreMaskForAllMachineCores());
-	_ring_size=config().getInt("ring_size", DEFAULT_RING_SIZE);
 
 	_urlsFile=config().getString("urllist","");
 	_domainsFile=config().getString("domainlist","");
@@ -384,11 +381,6 @@ int extFilter::main(const ArgVec& args)
 			logger().fatal("Number of cores (%d) is not enought for starting reader and worker threads (%d). Check the configuration.", (int) numOfCoresInMask, int (_num_of_readers + _num_of_workers));
 			return Poco::Util::Application::EXIT_CONFIG;
 		}
-		if(_ring_size > _BufPoolSize)
-		{
-			logger().fatal("Size of ring buffer can't be bigger than mbuffer size. Check the configuration.");
-			return Poco::Util::Application::EXIT_CONFIG;
-		}
 		if(_num_of_readers + _num_of_workers != numOfCoresInMask)
 		{
 			int total_workers = _num_of_readers + _num_of_workers;
@@ -414,7 +406,6 @@ int extFilter::main(const ArgVec& args)
 		handler.sa_flags   = 0;
 		sigemptyset(&handler.sa_mask);
 		sigaction(SIGHUP, &handler, NULL);
-		worker_ring = rte_ring_create("worker_ring", rte_align32pow2(_ring_size), rte_socket_id(), 0);
 
 		// collect the list of DPDK devices
 		std::vector<pcpp::DpdkDevice*> dpdkDevicesToUse;
@@ -448,33 +439,29 @@ int extFilter::main(const ArgVec& args)
 
 		// create worker thread for every core
 		std::vector<pcpp::DpdkWorkerThread*> workerThreadVec;
-		uint32_t i = 0;
-		
+
+		Distributor *distributor=new Distributor(_num_of_workers);
 		std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin();
 		// подгототавливаем readerы
+		uint32_t i = 0;
 		for(i=0; i < _num_of_readers; i++)
 		{
 			std::string workerName("ReaderThread " + std::to_string(i));
 			logger().debug("Preparing thread '%s'", workerName);
-			ReaderThread* newWorker = new ReaderThread(workerName, workerConfigArr[i], worker_ring);
+			ReaderThread* newWorker = new ReaderThread(workerName, workerConfigArr[i], distributor);
 			workerThreadVec.push_back(newWorker);
 			iter++;
 		}
 		int num_of_workers=_num_of_workers;
+		int worker_id=0;
 		while(iter != coresToUse.end() && num_of_workers)
 		{
-			if(!_urlsFile.empty())
+			if(!_domainsFile.empty() && !_urlsFile.empty())
 			{
 				workerConfigArr[i].atm = new AhoCorasickPlus();
-				loadURLs(_urlsFile, workerConfigArr[i].atm);
+				workerConfigArr[i].entriesData = new EntriesData();
+				loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[i].atm, workerConfigArr[i].entriesData);
 				workerConfigArr[i].atm->finalize();
-			}
-			if(!_domainsFile.empty())
-			{
-				workerConfigArr[i].atmDomains = new AhoCorasickPlus();
-				workerConfigArr[i].domainsMatchType = new DomainsMatchType;
-				loadDomains(_domainsFile,workerConfigArr[i].atmDomains, workerConfigArr[i].domainsMatchType);
-				workerConfigArr[i].atmDomains->finalize();
 			}
 			if(!_sslIpsFile.empty() && _block_undetected_ssl)
 			{
@@ -516,11 +503,12 @@ int extFilter::main(const ArgVec& args)
 
 			std::string workerName("WorkerThread " + std::to_string(i));
 			logger().debug("Preparing thread '%s'", workerName);
-			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i], worker_ring, mFlowHash);
+			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i], mFlowHash, distributor, worker_id);
 			workerThreadVec.push_back(newWorker);
 			i++;
 			iter++;
 			num_of_workers--;
+			worker_id++;
 		}
 
 		Poco::TaskManager tm;
@@ -557,9 +545,117 @@ int extFilter::main(const ArgVec& args)
 			delete thread;
 			
 		}
-		rte_ring_free(worker_ring);
 	}
 	return Poco::Util::Application::EXIT_OK;
+}
+
+void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm, EntriesData *ed)
+{
+	logger().debug("Loading domains from file %s",domains);
+	Poco::FileInputStream df(domains);
+	int entry_id=0;
+	if(df.good())
+	{
+		int lineno=0;
+		while(!df.eof())
+		{
+			lineno++;
+			std::string str;
+			getline(df,str);
+			if(!str.empty())
+			{
+				if(str[0] == '#' || str[0] == ';')
+					continue;
+				AhoCorasickPlus::EnumReturnStatus status;
+				AhoCorasickPlus::PatternId patId = entry_id;
+				std::size_t pos = str.find("*.");
+				bool exact_match=true;
+				std::string insert=str;
+				if(pos != std::string::npos)
+				{
+					exact_match=false;
+					insert=str.substr(pos+2,str.length()-2);
+				}
+				status = dm_atm->addPattern(insert, patId);
+				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
+				{
+					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
+					{
+						logger().warning("Pattern '%s' already present in the database from file %s",insert,domains);
+						continue;
+					} else {
+						logger().error("Failed to add '%s' from line %d from file %s",insert,lineno,domains);
+					}
+				} else {
+					entry_data e;
+					e.type = E_TYPE_DOMAIN;
+					e.match_exactly = exact_match;
+					e.lineno = lineno;
+					std::pair<EntriesData::Iterator,bool> res=ed->insert(EntriesData::ValueType(entry_id,e));
+					if(!res.second)
+					{
+						logger().fatal("Logic error: found duplicate in the EntriesData. Domain '%s' line %d from file '%s'", str, lineno, domains);
+						throw Poco::Exception("Logic error: found duplicate in the EntriesData.");
+					}
+				}
+			}
+			entry_id++;
+		}
+	} else
+		throw Poco::OpenFileException(domains);
+	df.close();
+	logger().debug("Finish loading domains");
+	logger().debug("Loading URLS from file %s",urls);
+	Poco::FileInputStream uf(urls);
+	if(uf.good())
+	{
+		int lineno=0;
+		while(!uf.eof())
+		{
+			lineno++;
+			std::string str;
+			getline(uf,str);
+			if(!str.empty())
+			{
+				if(str[0] == '#' || str[0] == ';')
+					continue;
+				AhoCorasickPlus::EnumReturnStatus status;
+				AhoCorasickPlus::PatternId patId = entry_id;
+/*				std::string url = str;
+				std::size_t http_pos = url.find("http://");
+				if(http_pos == std::string::npos || http_pos > 0)
+				{
+					url.insert(0,"http://");
+				}*/
+				status = dm_atm->addPattern(str, patId);
+				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
+				{
+					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
+					{
+						logger().warning("Pattern '%s' already present in the URL database from file %s",str,urls);
+						continue;
+					} else {
+						logger().error("Failed to add '%s' from line %d from file %s",str,lineno,urls);
+					}
+				} else {
+					entry_data e;
+					e.type = E_TYPE_URL;
+					e.match_exactly = false;
+					e.lineno = lineno;
+					std::pair<EntriesData::Iterator,bool> res=ed->insert(EntriesData::ValueType(entry_id,e));
+					if(!res.second)
+					{
+						logger().fatal("Logic error: found duplicate in the EntriesData. URL '%s' line %d from file '%s'", str, lineno, urls);
+						throw Poco::Exception("Logic error: found duplicate in the EntriesData.");
+					}
+				}
+			}
+			entry_id++;
+		}
+	} else
+		throw Poco::OpenFileException(urls);
+	uf.close();
+	logger().debug("Finish loading URLS");
 }
 
 void extFilter::loadURLs(std::string &fn, AhoCorasickPlus *dm_atm)
