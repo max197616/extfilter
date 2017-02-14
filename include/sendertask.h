@@ -99,7 +99,7 @@ private:
 class SenderTask: public Poco::Task
 {
 public:
-	SenderTask(struct CSender::params &prm);
+	SenderTask(struct CSender::params &prm, int instance);
 	~SenderTask();
 
 	void runTask();
@@ -109,7 +109,6 @@ public:
 
 private:
 	CSender *sender;
-	static Poco::FastMutex _mutex;
 	Poco::Logger& _logger;
 };
 

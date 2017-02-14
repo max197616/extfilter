@@ -139,6 +139,7 @@ void extFilter::initialize(Application& self)
 
 	_flowhash_size_per_worker=rte_align32pow2(_flowhash_size/_num_of_workers);
 
+	_num_of_senders=config().getInt("num_of_senders", 1);
 	_lower_host=config().getBool("lower_host", false);
 	_match_url_exactly=config().getBool("match_url_exactly", false);
 	_block_undetected_ssl=config().getBool("block_undetected_ssl", false);
@@ -512,7 +513,8 @@ int extFilter::main(const ArgVec& args)
 		}
 
 		Poco::TaskManager tm;
-		tm.start(new SenderTask(_sender_params));
+		for(int i=1; i <= _num_of_senders; i++)
+			tm.start(new SenderTask(_sender_params,i));
 
 		logger().debug("Starting worker threads...");
 		// start all worker threads from the end...

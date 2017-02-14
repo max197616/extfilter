@@ -21,13 +21,12 @@
 
 #include "sender.h"
 
-Poco::FastMutex SenderTask::_mutex;
 Poco::NotificationQueue SenderTask::queue;
 
-SenderTask::SenderTask(struct CSender::params &prm):
+SenderTask::SenderTask(struct CSender::params &prm, int instance):
 	Task("SenderTask"),
 	sender(new CSender(prm)),
-	_logger(Poco::Logger::get("SenderTask"))
+	_logger(Poco::Logger::get("SenderTask"+std::to_string(instance)))
 {
 
 }
