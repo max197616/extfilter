@@ -21,6 +21,8 @@
 #include <unistd.h>
 #include <netinet/ip6.h>
 #include <Poco/FileStream.h>
+#include <rte_config.h>
+#include <rte_ip.h>
 
 struct pseudo_header
 {
@@ -73,7 +75,7 @@ CSender::~CSender()
 
 void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip_to, int port_from, int port_to, uint32_t acknum, uint32_t seqnum, std::string &dt, int f_reset, int f_psh)
 {
-	char datagram[4096], *data, *pseudogram=NULL;
+	char datagram[4096], *data;
 	
 	// zero out the packet buffer
 	memset(datagram, 0, sizeof(datagram));
@@ -117,8 +119,6 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		iph->check = 0;
 		iph->saddr = ((in_addr *)ip_from.addr())->s_addr;
 		iph->daddr = sin.sin_addr.s_addr;
-		// IP checksum
-		iph->check = 0; // done by kernel  //this->csum((unsigned short *) datagram, iph->tot_len);
 	} else {
 		sin6.sin6_family = AF_INET6;
 		sin6.sin6_port = 0; // not filled in ipv6
@@ -163,41 +163,16 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 
 	if(ip_from.family() == Poco::Net::IPAddress::IPv4)
 	{
-		struct pseudo_header psh;
-		psh.source_address = ((in_addr *)ip_from.addr())->s_addr;
-		psh.dest_address = sin.sin_addr.s_addr;
-		psh.placeholder = 0;
-		psh.protocol = IPPROTO_TCP;
-		psh.tcp_length = htons(sizeof(struct tcphdr) + dt.size() );
-	
-		int psize = sizeof(struct pseudo_header) + sizeof(struct tcphdr) + dt.size();
-		pseudogram = (char*)calloc(1,psize);
-	
-		memcpy( pseudogram, (char*) &psh, sizeof(struct pseudo_header));
-		memcpy( pseudogram + sizeof(struct pseudo_header), tcph, sizeof(struct tcphdr) + dt.size());
-	
-		tcph->check = csum( (unsigned short*) pseudogram, psize);
-	
+		iph->tot_len = rte_cpu_to_be_16(iph->tot_len);
+		tcph->check = rte_ipv4_udptcp_cksum((const ipv4_hdr*)iph,tcph);
+		iph->tot_len = rte_be_to_cpu_16(iph->tot_len);
 		// Send the packet
 		if( ::sendto( this->s, datagram, iph->tot_len, 0, (struct sockaddr *)&sin, sizeof(sin)) < 0 )
 		{
 			_logger.error("sendto() failed to %s:%d errno: %d",ip_to.toString(), port_to, errno);
 		}
 	} else {
-		struct ipv6_pseudo_hdr psh;
-		// filling pseudoheader...
-		memcpy(&psh.source_address,&iph6->ip6_src,sizeof(iph6->ip6_src));
-		memcpy(&psh.dest_address,&iph6->ip6_dst,sizeof(iph6->ip6_dst));
-		psh.tcp_length = htonl(sizeof(tcphdr) + payloadlen);
-		psh.zero = 0;
-		psh.nexthdr = iph6->ip6_nxt;
-		int psize = sizeof(ipv6_pseudo_hdr) + sizeof(struct tcphdr) + payloadlen;
-
-		pseudogram = (char*)calloc(1,psize);
-		memcpy( pseudogram, (char*) &psh, sizeof(struct ipv6_pseudo_hdr));
-		memcpy( pseudogram + sizeof(struct ipv6_pseudo_hdr), tcph, sizeof(struct tcphdr) + dt.size());
-	
-		tcph->check = csum( (unsigned short*) pseudogram, psize);
+		tcph->check = rte_ipv6_udptcp_cksum((const ipv6_hdr*)iph6,tcph);
 
 		// Send the packet
 		if( ::sendto( this->s6, datagram, (sizeof(struct ip6_hdr) + sizeof(struct tcphdr) + payloadlen), 0, (struct sockaddr *)&sin6, sizeof(sin6)) < 0 )
@@ -205,8 +180,6 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 			_logger.error("sendto() failed to [%s]:%d errno: %d",ip_to.toString(), port_to, errno);
 		}
 	}
-	if(pseudogram)
-		free(pseudogram);
 
 	return;
 }
@@ -241,26 +214,3 @@ void CSender::SendRST(int user_port, int dst_port, Poco::Net::IPAddress &user_ip
 		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
 }
 
-unsigned short CSender::csum( unsigned short *ptr, int nbytes )
-{
-	register long sum;
-	unsigned short oddbyte;
-	register short answer;
-	
-	sum = 0;
-	while( nbytes > 1 ) {
-		sum+=*ptr++;
-		nbytes-=2;
-	}
-	if( nbytes==1 ) {
-		oddbyte=0;
-		*((u_char*)&oddbyte)=*(u_char*)ptr;
-		sum+=oddbyte;
-	}
-	
-	sum = (sum>>16)+(sum & 0xffff);
-	sum = sum+(sum>>16);
-	answer=(short)~sum;
-	
-	return( answer );
-}
