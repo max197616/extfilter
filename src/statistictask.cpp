@@ -164,7 +164,7 @@ void StatisticTask::OutStatistic()
 			app.logger().information("Thread IPv4 fragments: %" PRIu64 ", IPv6 fragments: %" PRIu64 ", IPv4 short packets: %" PRIu64, stats.ipv4_fragments, stats.ipv6_fragments, stats.ipv4_short_packets);
 			app.logger().information("Thread matched by ip/port: %" PRIu64 ", matched by ssl: %" PRIu64 ", matched by ssl/ip: %" PRIu64 ", matched by domain: %" PRIu64 ", matched by url: %" PRIu64, stats.matched_ip_port, stats.matched_ssl, stats.matched_ssl_ip, stats.matched_domains, stats.matched_urls);
 			app.logger().information("Thread redirected domains: %" PRIu64 ", redirected urls: %" PRIu64 ", rst sended: %" PRIu64, stats.redirected_domains,stats.redirected_urls,stats.sended_rst);
-			app.logger().information("Thread active flows: %" PRIu64 " (IPv4 flows: %" PRIu64 " IPv6 flows: %" PRIu64 "), expired flows: %" PRIu64, stats.ndpi_flows_count, stats.ndpi_ipv4_flows_count, stats.ndpi_ipv6_flows_count, stats.ndpi_flows_deleted);
+			app.logger().information("Thread active flows: %" PRIu64 " (IPv4 flows: %" PRIu64 " IPv6 flows: %" PRIu64 "), expired flows: %" PRIu64 ", already detected blocked: %" PRIu64, stats.ndpi_flows_count, stats.ndpi_ipv4_flows_count, stats.ndpi_ipv6_flows_count, stats.ndpi_flows_deleted, stats.already_detected_blocked);
 			if(!_statisticsFile.empty())
 			{
 				std::string worker_name("worker.core."+std::to_string(core));

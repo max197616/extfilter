@@ -81,6 +81,7 @@ struct ndpi_flow_info
 
 	uint64_t expire;
 	bool cli2srv_direction;
+	bool block;
 	ndpi_flow_info(uint8_t ip_ver, uint64_t l_seen) :
 		hash(0),
 		detection_completed(false),
@@ -92,7 +93,8 @@ struct ndpi_flow_info
 		src_id(NULL),
 		dst_id(NULL),
 		expire(0),
-		cli2srv_direction(true)
+		cli2srv_direction(true),
+		block(false)
 	{
 	}
 
@@ -107,7 +109,8 @@ struct ndpi_flow_info
 		src_id(NULL),
 		dst_id(NULL),
 		expire(0),
-		cli2srv_direction(true)
+		cli2srv_direction(true),
+		block(false)
 	{ }
 
 	bool isIdle(uint64_t time)

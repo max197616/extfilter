@@ -100,6 +100,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->last_seen = timestamp;
 			newflow->ip_version = 6;
 			newflow->cli2srv_direction = true;
+			newflow->block = false;
 			memcpy(&newflow->keys.ipv6_key, &key, sizeof(struct ipv6_5tuple));
 			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
@@ -162,6 +163,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->last_seen = timestamp;
 			newflow->ip_version = 4;
 			newflow->cli2srv_direction = true;
+			newflow->block = false;
 			memcpy(&newflow->keys.ipv4_key, &key, sizeof(struct ipv4_5tuple));
 			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
@@ -371,8 +373,14 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	flow_info->last_seen = timestamp;
 
-	if(flow_info->detection_completed)
+	if(flow_info->detection_completed && flow_info->block == false)
 		return false;
+
+	if(flow_info->detection_completed && flow_info->block == true)
+	{
+		m_ThreadStats.already_detected_blocked++;
+//		_logger.information("Got already blocked flow. Protocol %d. Src port in packet %d in flow %d, dst port in packet %d in flow %d. Source ip in packet %s in flow %d, dst ip in packet %s in flow %d", (int) flow_info->detected_protocol.protocol,(int)tcp_src_port,(int) flow_info->keys.ipv4_key.port_src,(int)tcp_dst_port,(int) flow_info->keys.ipv4_key.port_dst, src_ip->toString(), (int) flow_info->keys.ipv4_key.ip_src, dst_ip->toString(), (int) flow_info->keys.ipv4_key.ip_dst);
+	}
 
 	flow_info->detected_protocol = ndpi_detection_process_packet(m_WorkerConfig.ndpi_struct, flow_info->ndpi_flow,
 		l3,
@@ -456,6 +464,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 					std::string empty_str;
 					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 					m_ThreadStats.sended_rst++;
+					flow_info->block=true;
 					return true;
 				} else {
 					return false;
@@ -472,6 +481,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 						m_ThreadStats.sended_rst++;
 						std::string empty_str;
 						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+						flow_info->block=true;
 						return true;
 					}
 					m_WorkerConfig.sslIPsLock.unlock();
@@ -595,6 +605,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 							m_ThreadStats.sended_rst++;
 						}
+						flow_info->block=true;
 						return true;
 					}
 
