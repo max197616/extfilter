@@ -23,16 +23,16 @@
 
 
 
-#define EXTF_GC_INTERVAL	1000
+#define EXTF_GC_INTERVAL	1000 // us
 #define EXTF_GC_BUDGET		128 // entries per EXTF_GC_INTERVAL
 
 
 #define MAX_IDLE_TIME           30000 // msec
 
-#define TICK_RESOLUTION          1000
-
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
+
+#define URI_RESERVATION_SIZE 2048
 
 /**
  * Contains all the configuration needed for the worker thread including:
@@ -66,6 +66,9 @@ struct WorkerConfig
 
 	EntriesData *entriesData;
 
+	bool url_normalization;
+	bool remove_dot;
+
 	WorkerConfig()
 	{
 		CoreId = MAX_NUM_OF_CORES+1;
@@ -82,6 +85,9 @@ struct WorkerConfig
 		ndpi_struct = NULL;
 //		max_ndpi_flows = MAX_NDPI_FLOWS;
 //		num_roots = NUM_ROOTS;
+
+		url_normalization = true;
+		remove_dot = true;
 	}
 /*	
 	WorkerConfig(const WorkerConfig& cf)
@@ -114,6 +120,8 @@ private:
 	Distributor *_distr;
 
 	int _worker_id;
+
+	std::string uri;
 
 	bool analyzePacket(pcpp::Packet &parsedPacket);
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);

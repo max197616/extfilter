@@ -61,7 +61,7 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes", (int) (fh->getHashSize()*2*sizeof(struct ndpi_flow_info)));
 		throw Poco::Exception("Not enough memory for flows pool");
 	}
-
+	uri.reserve(URI_RESERVATION_SIZE);
 }
 
 WorkerThread::~WorkerThread()
@@ -404,7 +404,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	flow_info->bytes += ip_len;
 	flow_info->packets++;
-	if(flow_info->detected_protocol.protocol != NDPI_PROTOCOL_UNKNOWN)
+	if(flow_info->detected_protocol.protocol != NDPI_PROTOCOL_SSL && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_SSL && flow_info->detected_protocol.protocol == NDPI_PROTOCOL_TOR && flow_info->detected_protocol.master_protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
 		flow_info->detection_completed = true;
 
 	if(flow_info->detected_protocol.master_protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_TOR)
@@ -494,6 +494,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	if(flow_info->detected_protocol.master_protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
 	{
+//		flow_info->detection_completed = true;
 		return false;
 	}
 
@@ -503,25 +504,34 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		{
 			if(m_WorkerConfig.atmLock.tryLock())
 			{
-				std::string uri_o(flow_info->ndpi_flow->http.url ? flow_info->ndpi_flow->http.url : "");
-				std::string uri;
-				try
+				if(m_WorkerConfig.url_normalization)
 				{
-					Poco::URI uri_p(uri_o);
-					uri_p.normalize();
-					uri.assign(uri_p.toString());
-				} catch (Poco::SyntaxException &ex)
-				{
-					_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri_o);
-					uri.assign(uri_o);
-					std::transform(uri.begin(), uri.end(), uri.begin(), ::tolower);
+					try
+					{
+						Poco::URI uri_p(flow_info->ndpi_flow->http.url);
+						uri_p.normalize();
+						uri.assign(uri_p.toString());
+					} catch (Poco::SyntaxException &ex)
+					{
+						_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), flow_info->ndpi_flow->http.url);
+						uri.assign(flow_info->ndpi_flow->http.url);
+					}
+				} else {
+					uri.assign(flow_info->ndpi_flow->http.url);
 				}
-				// remove dot after domain...
-				size_t f_slash_pos=uri.find("/",10);
-				if(f_slash_pos != std::string::npos)
+				if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
 				{
-					if(uri[f_slash_pos-1] == '.')
-						uri.erase(f_slash_pos-1,1);
+					// remove dot after domain...
+					size_t f_slash_pos=uri.find('/',10);
+					if(!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host && f_slash_pos != std::string::npos)
+					{
+						std::transform(uri.begin()+7, uri.begin()+f_slash_pos, uri.begin()+7, ::tolower);
+					}
+					if(m_WorkerConfig.remove_dot && f_slash_pos != std::string::npos)
+					{
+						if(uri[f_slash_pos-1] == '.')
+							uri.erase(f_slash_pos-1,1);
+					}
 				}
 				AhoCorasickPlus::Match match;
 				bool found=false;
@@ -571,7 +581,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 							{
 								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
 									break;
-								case A_TYPE_URL: add_param="url="+uri_o;
+								case A_TYPE_URL: add_param="url="+uri;
 									break;
 								default: break;
 							}
@@ -594,7 +604,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 							{
 								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
 									break;
-								case A_TYPE_URL: add_param="url="+uri_o;
+								case A_TYPE_URL: add_param="url="+uri;
 									break;
 								default: break;
 							}

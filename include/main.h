@@ -108,6 +108,8 @@ private:
 	bool _match_url_exactly;
 	bool _block_undetected_ssl;
 	bool _http_redirect;
+	bool _url_normalization;
+	bool _remove_dot;
 
 	uint32_t _num_of_readers;
 	uint32_t _num_of_workers;

@@ -144,6 +144,8 @@ void extFilter::initialize(Application& self)
 	_match_url_exactly=config().getBool("match_url_exactly", false);
 	_block_undetected_ssl=config().getBool("block_undetected_ssl", false);
 	_http_redirect=config().getBool("http_redirect", true);
+	_url_normalization=config().getBool("url_normalization", true);
+	_remove_dot=config().getBool("remove_dot", true);
 	_statistic_interval=config().getInt("statistic_interval", 0);
 	_nbRxQueues = 1;
 //	_nbRxQueues=config().getInt("rx_queues", 1);
@@ -487,6 +489,8 @@ int extFilter::main(const ArgVec& args)
 			workerConfigArr[i].match_url_exactly = _match_url_exactly;
 			workerConfigArr[i].lower_host = _lower_host;
 			workerConfigArr[i].http_redirect = _http_redirect;
+			workerConfigArr[i].url_normalization = _url_normalization;
+			workerConfigArr[i].remove_dot = _remove_dot;
 			workerConfigArr[i].add_p_type = _add_p_type;
 			workerConfigArr[i].ndpi_struct = init_ndpi();
 			if (!workerConfigArr[i].ndpi_struct)
