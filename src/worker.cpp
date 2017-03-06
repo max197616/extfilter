@@ -640,6 +640,11 @@ bool WorkerThread::run(uint32_t coreId)
 
 	const uint64_t gc_int_tsc = (extFilter::getTscHz() + US_PER_S - 1) / US_PER_S * EXTF_GC_INTERVAL;
 
+	int32_t n_flows=m_FlowHash->getHashSize();
+	int gc_budget = ((double)n_flows/(EXTF_ALL_GC_INTERVAL*1000*1000))*EXTF_GC_INTERVAL;
+
+	_logger.debug("gc_budget = %d",gc_budget);
+
 	if (!m_WorkerConfig.PathToWritePackets.empty())
 	{
 		pcapWriter = new pcpp::PcapFileWriterDevice(m_WorkerConfig.PathToWritePackets.c_str());
@@ -680,7 +685,7 @@ bool WorkerThread::run(uint32_t coreId)
 		if (unlikely(diff_gc_tsc >= gc_int_tsc))
 		{
 			int z=0;
-			while(z < EXTF_GC_BUDGET)
+			while(z < gc_budget && iter_flows < n_flows)
 			{
 				if(ipv4_flows[iter_flows] && ((ipv4_flows[iter_flows]->last_seen+timeout) < cur_tsc))
 				{
@@ -715,7 +720,7 @@ bool WorkerThread::run(uint32_t coreId)
 				z++;
 				iter_flows++;
 			}
-			iter_flows &= (m_FlowHash->getHashSize()-1);
+			iter_flows &= (n_flows-1);
 			prev_gc_tsc = cur_tsc;
 		}
 	}

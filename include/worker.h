@@ -25,6 +25,7 @@
 
 #define EXTF_GC_INTERVAL	1000 // us
 #define EXTF_GC_BUDGET		128 // entries per EXTF_GC_INTERVAL
+#define EXTF_ALL_GC_INTERVAL 1 // seconds
 
 
 #define MAX_IDLE_TIME           30000 // msec

@@ -8,6 +8,7 @@ Type=forking
 ExecStart=/usr/local/bin/extFilter --daemon --pidfile=/var/run/extFilter.pid --config-file /usr/local/etc/extfilter.ini
 PIDFile=/var/run/extFilter.pid
 ExecReload=/bin/kill -HUP $MAINPID
+Nice=-5
 
 [Install]
 WantedBy=multi-user.target
