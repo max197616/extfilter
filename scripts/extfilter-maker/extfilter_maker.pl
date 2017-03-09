@@ -224,11 +224,14 @@ while (my $ips = $sth->fetchrow_hashref())
 	}
 
 	$url1->host($host);
-
 	my $url11 = $url1->canonical();
-	$url11 =~ s/^http\:\/\///;
 
+	$url11 =~ s/^http\:\/\///;
 	$url2 =~ s/^http\:\/\///;
+
+	my $host_end=index($url2,'/',7);
+	my $need_add_dot=0;
+	$need_add_dot=1 if(substr($url2, $host_end-1 , 1) eq ".");
 
 	# убираем любое упоминание о фрагменте... оно не нужно
 	$url11 =~ s/^(.*)\#(.*)$/$1/g;
@@ -250,13 +253,14 @@ while (my $ips = $sth->fetchrow_hashref())
 
 	$url11 =~ s/\/\.$//;
 	$url2 =~ s/\/\.$//;
+	$url11 =~ s/\//\.\// if($need_add_dot);
 	insert_to_url($url11);
 	if($url2 ne $url11)
 	{
 #		print "insert original url $url2\n";
 		insert_to_url($url2);
 	}
-	make_special_chars($url11,$url1->as_iri());
+	make_special_chars($url11,$url1->as_iri(),$need_add_dot);
 }
 $sth->finish();
 
@@ -381,6 +385,7 @@ sub make_special_chars
 	my $url1=$url;
 	my $orig_rkn=shift;
 	my $orig_url=$url;
+	my $need_add_dot=shift;
 	$url = _encode_sp($url);
 	if($url ne $orig_url)
 	{
@@ -406,6 +411,7 @@ sub make_special_chars
 	{
 		return if($orig_rkn =~ /^http\:\/\/[а-я]/i || $orig_rkn =~ /^http\:\/\/www\.[а-я]/i);
 		$orig_rkn =~ s/^http\:\/\///;
+		$orig_rkn =~ s/\//\.\// if($need_add_dot);
 		$orig_rkn =~ s/^(.*)\#(.*)$/$1/g;
 		$orig_rkn .= "/" if($orig_rkn !~ /\//);
 		$orig_rkn =~ s/\/+/\//g;
