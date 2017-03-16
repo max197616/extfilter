@@ -1,10 +1,5 @@
 #pragma once
 
-#include <DpdkDevice.h>
-#include <DpdkDeviceList.h>
-#include <Packet.h>
-#include <PacketUtils.h>
-#include <HttpLayer.h>
 #include <vector>
 #include <map>
 #include <unordered_map>
@@ -20,7 +15,7 @@
 #include "patr.h"
 #include "flow.h"
 #include "stats.h"
-
+#include "dpdk.h"
 
 
 #define EXTF_GC_INTERVAL	1000 // us
@@ -43,7 +38,7 @@
 struct WorkerConfig
 {
 	uint32_t CoreId;
-	InputDataConfig InDataCfg;
+	int port;
 	AhoCorasickPlus *atm;
 	Poco::FastMutex atmLock; // для загрузки url
 	AhoCorasickPlus *atmSSLDomains;
@@ -72,7 +67,7 @@ struct WorkerConfig
 
 	WorkerConfig()
 	{
-		CoreId = MAX_NUM_OF_CORES+1;
+		CoreId = RTE_MAX_LCORE+1;
 		atm = NULL;
 		atmSSLDomains = NULL;
 		SSLdomainsMatchType = NULL;
@@ -99,12 +94,11 @@ struct WorkerConfig
 
 class Distributor;
 
-class WorkerThread : public pcpp::DpdkWorkerThread
+class WorkerThread : public DpdkWorkerThread
 {
 private:
 	WorkerConfig &m_WorkerConfig;
 	bool m_Stop;
-	uint32_t m_CoreId;
 	Poco::Logger& _logger;
 	ThreadStats m_ThreadStats;
 
@@ -124,7 +118,6 @@ private:
 
 	std::string uri;
 
-	bool analyzePacket(pcpp::Packet &parsedPacket);
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
 	bool analyzePacketFlow(struct rte_mbuf *m, uint64_t timestamp);
 //	Flow *getFlow(Poco::Net::IPAddress *src_ip, Poco::Net::IPAddress *dst_ip, uint16_t src_port, uint8_t dst_port, uint8_t protocol, bool *src2dst_direction, time_t first_seen, time_t last_seen, bool *new_flow);
@@ -139,11 +132,6 @@ public:
 	{
 		// assign the stop flag which will cause the main loop to end
 		m_Stop = true;
-	}
-
-	uint32_t getCoreId()
-	{
-		return m_CoreId;
 	}
 
 	const ThreadStats& getStats()
@@ -165,12 +153,11 @@ public:
 //	ndpi_flow_info *getFlow(Poco::Net::IPAddress *src_ip, Poco::Net::IPAddress *dst_ip, uint16_t src_port, uint8_t dst_port, uint8_t protocol, uint64_t timestamp);
 };
 
-class ReaderThread : public pcpp::DpdkWorkerThread
+class ReaderThread : public DpdkWorkerThread
 {
 private:
 	WorkerConfig &m_WorkerConfig;
 	bool m_Stop;
-	uint32_t m_CoreId;
 	Poco::Logger& _logger;
 	ThreadStats m_ThreadStats;
 	bool m_CanRun;
@@ -185,10 +172,6 @@ public:
 	void stop()
 	{
 		m_Stop = true;
-	}
-	uint32_t getCoreId()
-	{
-		return m_CoreId;
 	}
 	const ThreadStats& getStats()
 	{

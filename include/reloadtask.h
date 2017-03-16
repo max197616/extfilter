@@ -22,16 +22,15 @@
 #include <Poco/Event.h>
 #include <Poco/Task.h>
 #include <Poco/Logger.h>
-#include <DpdkDevice.h>
-#include <DpdkDeviceList.h>
 #include <vector>
+#include "dpdk.h"
 
 class extFilter;
 
 class ReloadTask: public Poco::Task
 {
 public:
-	ReloadTask(extFilter *parent, std::vector<pcpp::DpdkWorkerThread*>& workerThreadVector);
+	ReloadTask(extFilter *parent, std::vector<DpdkWorkerThread*>& workerThreadVector);
 	~ReloadTask();
 	void runTask();
 	static Poco::Event _event;
@@ -39,6 +38,6 @@ public:
 private:
 	extFilter *_parent;
 	Poco::Logger& _logger;
-	std::vector<pcpp::DpdkWorkerThread*>& workerThreadVec;
+	std::vector<DpdkWorkerThread*>& workerThreadVec;
 };
 

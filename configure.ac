@@ -2,9 +2,8 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.3, max1976@mail.ru)
+AC_INIT(extFilter, 0.41, max1976@mail.ru)
 
-PPP_HOME=./PcapPlusPlus
 DPDK_HOME=
 DPDK_TARGET=
 
@@ -135,15 +134,6 @@ if test "$HAVE_POCONET"; then
 fi
 
 AC_ARG_WITH(
-    [ppp_home],
-    AS_HELP_STRING(
-    	[--with-ppp_home=DIR],
-    	    [Path to PcapPlusPlus library]
-    ),
-    [PPP_HOME="$withval"]
-)
-
-AC_ARG_WITH(
     [dpdk_home],
     AS_HELP_STRING(
     	[--with-dpdk_home=DIR],
@@ -169,37 +159,9 @@ if test -z "$DPDK_HOME"; then
     AC_MSG_ERROR([dpdk_home must be set])
 fi
 
-dnl PcapPlusPlus checks...
-AC_MSG_CHECKING(for PcapPlusPlus $PPP_HOME)
-if test -d "$PPP_HOME" ; then :
-    AC_MSG_RESULT(found in $PPP_HOME)
-else
-    AC_MSG_RESULT(not found)
-    AC_MSG_NOTICE(Getting PPP from git)
-#    git clone -b master https://github.com/max197616/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; cd -
-    git clone -b master https://github.com/seladb/PcapPlusPlus.git $PPP_HOME; cd $PPP_HOME; patch -p1 < ../ppp.patch; cd -
-    AC_MSG_CHECKING(for PPP $PPP_HOME)
-    if test -d "$PPP_HOME" ; then :
-	AC_MSG_RESULT(found in $PPP_HOME)
-    else
-	AC_MSG_ERROR(Install PcapPlusPlus manually!)
-    fi
-fi
-
-PPP_LIB=$PPP_HOME/Dist/libCommon++.a
-AC_MSG_CHECKING(for $PPP_LIB)
-if test -f "$PPP_LIB" ; then :
-    AC_MSG_RESULT(yes)
-else
-    AC_MSG_RESULT([not found, compiling...])
-    cd $PPP_HOME; ./configure-linux.sh --dpdk --dpdk-home $DPDK_HOME --dpdk-target $DPDK_TARGET; make; cd -
-fi
-
 
 AC_SUBST(DPDK_LIB,$DPDK_HOME/$DPDK_TARGET/lib)
 AC_SUBST(DPDK_INCLUDE,$DPDK_HOME/$DPDK_TARGET/include)
-AC_SUBST(PPP_LIB,$PPP_HOME/Dist)
-AC_SUBST(PPP_HEADER,$PPP_LIB/header)
 
 dnl nDPI checks...
 AC_MSG_CHECKING(for nDPI $NDPI_HOME)

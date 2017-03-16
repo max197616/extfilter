@@ -27,7 +27,7 @@
 Poco::Event ReloadTask::_event;
 
 
-ReloadTask::ReloadTask(extFilter *parent, std::vector<pcpp::DpdkWorkerThread*> &workerThreadVector):
+ReloadTask::ReloadTask(extFilter *parent, std::vector<DpdkWorkerThread*> &workerThreadVector):
 	Task("ReloadTask"),
 	_parent(parent),
 	_logger(Poco::Logger::get("ReloadTask")),
@@ -49,7 +49,7 @@ void ReloadTask::runTask()
 		if(_event.tryWait(300))
 		{
 			_logger.information("Reloading data from files...");
-			for(std::vector<pcpp::DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
+			for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 			{
 				if(dynamic_cast<WorkerThread*>(*it) == nullptr)
 					continue;

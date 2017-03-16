@@ -1,5 +1,7 @@
 
 #include <Poco/Util/ServerApplication.h>
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 
 #include <rte_config.h>
 #include <rte_ethdev.h>

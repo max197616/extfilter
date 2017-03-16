@@ -2,7 +2,6 @@
 
 #include <Poco/Util/ServerApplication.h>
 #include <Poco/HashMap.h>
-#include <DpdkDevice.h>
 #include "dtypes.h"
 #include "sender.h"
 
@@ -87,11 +86,12 @@ public:
 		return _tsc_hz;
 	}
 	
-	pcpp::CoreMask _coreMaskToUse;
 	uint32_t _BufPoolSize = DEFAULT_MBUF_POOL_SIZE;
 	std::vector<int> _dpdkPortVec;
 	
 private:
+	int initPort(int port, struct rte_mempool *mbuf_pool, struct ether_addr *addr);
+
 	bool _helpRequested;
 	bool _listDPDKPorts;
 	int _nbRxQueues;
@@ -111,8 +111,8 @@ private:
 	bool _url_normalization;
 	bool _remove_dot;
 
-	uint32_t _num_of_readers;
-	uint32_t _num_of_workers;
+	int _num_of_readers;
+	int _num_of_workers;
 	int _statistic_interval;
 	uint32_t _ring_size;
 	enum ADD_P_TYPES _add_p_type;

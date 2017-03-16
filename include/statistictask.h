@@ -19,20 +19,19 @@
 
 #pragma once
 #include <Poco/Task.h>
-#include <DpdkDevice.h>
-#include <DpdkDeviceList.h>
 #include <vector>
+#include "dpdk.h"
 
 class StatisticTask: public Poco::Task
 {
 public:
-	StatisticTask(int sec, std::vector<pcpp::DpdkWorkerThread*>& workerThreadVector, std::string &statisticsFile);
+	StatisticTask(int sec, std::vector<DpdkWorkerThread*>& workerThreadVector, std::string &statisticsFile);
 	void runTask();
 	void OutStatistic();
 
 private:
 	int _sec;
-	std::vector<pcpp::DpdkWorkerThread*>& workerThreadVec;
+	std::vector<DpdkWorkerThread*>& workerThreadVec;
 	std::string _statisticsFile;
 };
 

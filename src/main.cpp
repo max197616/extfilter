@@ -1,3 +1,4 @@
+#include <cinttypes>
 #include <Poco/Util/Option.h>
 #include <Poco/Util/OptionSet.h>
 #include <Poco/Util/HelpFormatter.h>
@@ -5,10 +6,6 @@
 #include <Poco/FileStream.h>
 #include <Poco/TaskManager.h>
 #include <Poco/StringTokenizer.h>
-#include <DpdkDevice.h>
-#include <DpdkDeviceList.h>
-#include <DnsLayer.h>
-#include <SSLLayer.h>
 #include <rte_config.h>
 #include <rte_malloc.h>
 #include <rte_cycles.h>
@@ -16,6 +13,8 @@
 
 #include <iostream>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 #include "worker.h"
 #include "main.h"
 
@@ -27,11 +26,23 @@
 #include "reloadtask.h"
 #include "distributor.h"
 
+#define MBUF_CACHE_SIZE 256
+
+#define RX_RING_SIZE 256
+#define TX_RING_SIZE 512
+
+#define DPDK_CONFIG_HEADER_SPLIT	0 /**< Header Split disabled */
+#define DPDK_CONFIG_SPLIT_HEADER_SIZE	0
+#define DPDK_CONFIG_HW_IP_CHECKSUM	0 /**< IP checksum offload disabled */
+#define DPDK_CONFIG_HW_VLAN_FILTER	0 /**< VLAN filtering disabled */
+#define DPDK_CONFIG_JUMBO_FRAME		0 /**< Jumbo Frame Support disabled */
+#define DPDK_CONFIG_HW_STRIP_CRC	0 /**< CRC stripped by hardware disabled */
+#define DPDK_CONFIG_MQ_MODE		ETH_MQ_RX_RSS
+
 uint64_t extFilter::_tsc_hz;
 
 extFilter::extFilter(): _helpRequested(false), _listDPDKPorts(false), _nbRxQueues(1)
 {
-	_coreMaskToUse = pcpp::getCoreMaskForAllMachineCores();
 //	Poco::ErrorHandler::set(&_errorHandler);
 }
 
@@ -40,75 +51,77 @@ extFilter::~extFilter()
 {
 }
 
-/**
- * Prepare the configuration for each core. Configuration includes: which DpdkDevices and which RX queues to receive packets from, where to send the matched
- * packets, etc.
- */
-void prepareCoreConfiguration(std::vector<pcpp::DpdkDevice*>& dpdkDevicesToUse, std::vector<pcpp::SystemCore>& coresToUse, WorkerConfig workerConfigArr[], int workerConfigArrLen, int num_of_readers, int nbRxQueues)
+
+uint8_t m_RSSKey[40] = {
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
+};
+
+int extFilter::initPort(int port, struct rte_mempool *mbuf_pool, struct ether_addr *addr)
 {
-	// create a list of pairs of DpdkDevice and RX queues for all RX queues in all requested devices
-	int totalNumOfRxQueues = 0;
-	std::vector<std::pair<pcpp::DpdkDevice*, int> > deviceAndRxQVec;
-	for (std::vector<pcpp::DpdkDevice*>::iterator iter = dpdkDevicesToUse.begin(); iter != dpdkDevicesToUse.end(); iter++)
+	const uint16_t rxRings = 1, txRings = 1;
+	uint16_t q;
+	struct rte_eth_conf portConf;
+	memset(&portConf,0,sizeof(rte_eth_conf));
+	portConf.rxmode.split_hdr_size = DPDK_CONFIG_SPLIT_HEADER_SIZE;
+	portConf.rxmode.header_split = DPDK_CONFIG_HEADER_SPLIT;
+	portConf.rxmode.hw_ip_checksum = DPDK_CONFIG_HW_IP_CHECKSUM;
+	portConf.rxmode.hw_vlan_filter = DPDK_CONFIG_HW_VLAN_FILTER;
+	portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME;
+	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
+	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
+//<---->portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
+	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
+	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
+	int retval;
+	retval = rte_eth_dev_configure(port, rxRings, txRings, &portConf);
+	if (retval != 0)
+		return retval;
+
+	for (q = 0; q < rxRings; q++)
 	{
-		if(nbRxQueues > (*iter)->getTotalNumOfRxQueues())
-			nbRxQueues=(*iter)->getTotalNumOfRxQueues();
-		for (int rxQueueIndex = 0; rxQueueIndex < nbRxQueues; rxQueueIndex++)
-		{
-			std::pair<pcpp::DpdkDevice*, int> curPair(*iter, rxQueueIndex);
-			deviceAndRxQVec.push_back(curPair);
-		}
-		totalNumOfRxQueues += nbRxQueues;
+		retval = rte_eth_rx_queue_setup(port, q, RX_RING_SIZE, rte_eth_dev_socket_id(port), NULL, mbuf_pool);
+		if (retval < 0)
+			return retval;
 	}
 
-	// calculate how many RX queues each core will read packets from. We divide the total number of RX queues with total number of core
-//	int numOfRxQueuesPerCore = totalNumOfRxQueues / coresToUse.size();
-//	int rxQueuesRemainder = totalNumOfRxQueues % coresToUse.size();
-
-	int numOfRxQueuesPerCore = totalNumOfRxQueues / num_of_readers;
-	int rxQueuesRemainder = totalNumOfRxQueues % num_of_readers;
-
-	// prepare the configuration for every core: divide the devices and RX queue for each device with the various cores
-	int i = 0;
-	std::vector<std::pair<pcpp::DpdkDevice*, int> >::iterator pairVecIter = deviceAndRxQVec.begin();
-	for (std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin(); iter != coresToUse.end(); iter++)
+	for (q = 0; q < txRings; q++)
 	{
-		printf("Using core %d\n", iter->Id);
-		workerConfigArr[i].CoreId = iter->Id;
-
-		for (int rxQIndex = 0; rxQIndex < numOfRxQueuesPerCore; rxQIndex++)
-		{
-			if (pairVecIter == deviceAndRxQVec.end())
-				break;
-			workerConfigArr[i].InDataCfg[pairVecIter->first].push_back(pairVecIter->second);
-			pairVecIter++;
-		}
-		if (rxQueuesRemainder > 0 && (pairVecIter != deviceAndRxQVec.end()))
-		{
-			workerConfigArr[i].InDataCfg[pairVecIter->first].push_back(pairVecIter->second);
-			pairVecIter++;
-			rxQueuesRemainder--;
-		}
-
-		// print configuration for core
-		printf("\tCore configuration:\n");
-		for (InputDataConfig::iterator iter = workerConfigArr[i].InDataCfg.begin(); iter != workerConfigArr[i].InDataCfg.end(); iter++)
-		{
-			printf("\t\tReader thread DPDK device#%d: ", iter->first->getDeviceId());
-			for (std::vector<int>::iterator iter2 = iter->second.begin(); iter2 != iter->second.end(); iter2++)
-			{
-				printf("RX-Queue#%d;  ", *iter2);
-
-			}
-			printf("\n");
-		}
-		if (workerConfigArr[i].InDataCfg.size() == 0)
-		{
-			printf("\t\tWorker thread\n");
-		}
-		i++;
+		retval = rte_eth_tx_queue_setup(port, q, TX_RING_SIZE, rte_eth_dev_socket_id(port), NULL);
+		if (retval < 0)
+			return retval;
 	}
 
+	retval = rte_eth_dev_start(port);
+	if (retval < 0)
+		return retval;
+
+	struct rte_eth_link link;
+	rte_eth_link_get_nowait(port, &link);
+	if (!link.link_status)
+	{
+		sleep(1);
+		rte_eth_link_get_nowait(port, &link);
+	}
+
+	if (!link.link_status)
+	{
+		logger().warning("Link down on port %d", port);
+		return 0;
+	}
+
+	rte_eth_macaddr_get(port, addr);
+	char buffer[100];
+	sprintf(buffer,"%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8, addr->addr_bytes[0], addr->addr_bytes[1], addr->addr_bytes[2], addr->addr_bytes[3],addr->addr_bytes[4], addr->addr_bytes[5]);
+	std::string mac_addr(buffer);
+	logger().information("Port %d MAC: %s", port, mac_addr);
+
+	rte_eth_promiscuous_enable(port);
+
+	return 0;
 }
 
 void extFilter::initialize(Application& self)
@@ -153,14 +166,6 @@ void extFilter::initialize(Application& self)
 
 
 	logger().information("Setting mbuf size to %u",_BufPoolSize);
-	// initialize DPDK
-	if (!pcpp::DpdkDeviceList::initDpdk(_coreMaskToUse, _BufPoolSize))
-	{
-		logger().fatal("Couldn't initialize DPDK!");
-		throw Poco::Exception("Couldn't initialize DPDK");
-	}
-
-	_coreMaskToUse=config().getInt("core_mask", pcpp::getCoreMaskForAllMachineCores());
 
 	_urlsFile=config().getString("urllist","");
 	_domainsFile=config().getString("domainlist","");
@@ -216,12 +221,55 @@ void extFilter::initialize(Application& self)
 		throw Poco::Exception("DPDK ports not specified!");
 	}
 
-
 	_protocolsFile=config().getString("protocols","");
 
-	// removing DPDK master core from core mask because DPDK worker threads cannot run on master core
-	_coreMaskToUse = _coreMaskToUse & ~(pcpp::DpdkDeviceList::getInstance().getDpdkMasterCore().Mask);
-	
+	int coreMaskToUse=config().getInt("core_mask", 0);
+
+	// initialize DPDK
+	std::stringstream dpdkParamsStream;
+	dpdkParamsStream << commandName().c_str() << " ";
+	dpdkParamsStream << "-n ";
+	dpdkParamsStream << "2 ";
+	dpdkParamsStream << "-c ";
+	dpdkParamsStream << "0x" << std::hex << std::setw(2) << std::setfill('0') << coreMaskToUse << " ";
+	dpdkParamsStream << "--master-lcore ";
+	dpdkParamsStream << "0";
+
+
+	int initDpdkArgc=7;
+	std::string dpdkParamsArray[initDpdkArgc];
+	char** initDpdkArgv = new char*[initDpdkArgc];
+	int i = 0;
+	while (dpdkParamsStream.good() && i < initDpdkArgc)
+	{
+		dpdkParamsStream >> dpdkParamsArray[i];
+		initDpdkArgv[i] = new char[dpdkParamsArray[i].size()+1];
+		strcpy(initDpdkArgv[i], dpdkParamsArray[i].c_str());
+		i++;
+	}
+
+	char* lastParam = initDpdkArgv[i-1];
+
+	for (i = 0; i < initDpdkArgc; i++)
+	{
+		std::string arg(initDpdkArgv[i]);
+		logger().debug("DPDK command line: %s", arg);
+	}
+
+	optind = 1;
+	// init the EAL
+	int ret = rte_eal_init(initDpdkArgc, (char**)initDpdkArgv);
+	if (ret < 0)
+		throw Poco::Exception("Can't initialize EAL - invalid EAL arguments");
+
+	for (i = 0; i < initDpdkArgc-1; i++)
+	{
+		delete [] initDpdkArgv[i];
+	}
+	delete [] lastParam;
+
+	delete [] initDpdkArgv;
+
 	// init value...
 	_tsc_hz = rte_get_tsc_hz();
 
@@ -257,11 +305,6 @@ void extFilter::defineOptions(Poco::Util::OptionSet& options)
 			.repeatable(false)
 			.argument("PORT_1..."));
 	options.addOption(
-		Poco::Util::Option("core-mask","c","Core mask of cores to use. For example: use 7 (binary 0111) to use cores 0,1,2. Default is using all cores except management core.")
-			.required(false)
-			.repeatable(false)
-			.argument("CORE_MASK"));
-	options.addOption(
 		Poco::Util::Option("mbuf-pool-size","m","DPDK mBuf pool size to initialize DPDK with. Default value is 4095.")
 			.required(false)
 			.repeatable(false)
@@ -274,10 +317,6 @@ void extFilter::handleOption(const std::string& name,const std::string& value)
 	if(name == "config-file")
 	{
 		loadConfiguration(value);
-	}
-	if(name == "core-mask")
-	{
-		_coreMaskToUse = Poco::NumberParser::parse(value);
 	}
 	if(name == "mbuf-pool-size")
 	{
@@ -313,9 +352,8 @@ void extFilter::printDPDKPorts(const std::string& name,const std::string& value)
 {
 	_listDPDKPorts=true;
 	stopOptionsProcessing();
-	pcpp::CoreMask coreMaskToUse = pcpp::getCoreMaskForAllMachineCores();
 	// initialize DPDK
-	if (!pcpp::DpdkDeviceList::initDpdk(coreMaskToUse, DEFAULT_MBUF_POOL_SIZE))
+/*	if (!pcpp::DpdkDeviceList::initDpdk(coreMaskToUse, DEFAULT_MBUF_POOL_SIZE))
 	{
 		logger().fatal("Couldn't initialize DPDK!");
 		return;
@@ -334,6 +372,7 @@ void extFilter::printDPDKPorts(const std::string& name,const std::string& value)
 				dev->getPciAddress().toString().c_str(),
 				dev->getPMDName().c_str());
 	}
+*/
 
 }
 
@@ -352,112 +391,96 @@ int extFilter::main(const ArgVec& args)
 {
 	if(!_helpRequested && !_listDPDKPorts)
 	{
-		std::map<uint16_t, bool> *ptr=(std::map<uint16_t, bool> *)pcpp::DnsLayer::getDNSPortMap();
-		ptr->clear();
+//		int i;
+		int nb_lcores = rte_lcore_count();
+		int master_core_id = rte_get_master_lcore();
 
-		ptr=(std::map<uint16_t, bool> *)pcpp::SSLLayer::getSSLPortMap();
-		ptr->clear();
-
-		ptr=(std::map<uint16_t, bool> *)pcpp::HttpMessage::getHTTPPortMap();
-		ptr->clear();
-
-		pcpp::CoreMask tempCoreMask = _coreMaskToUse;
-		size_t numOfCoresInMask = 0;
-		int coreNum = 0;
-		while (tempCoreMask > 0)
-		{
-			if (tempCoreMask & 1)
-			{
-				numOfCoresInMask++;
-			}
-			tempCoreMask = tempCoreMask >> 1;
-			coreNum++;
+		logger().information("Master core is %d", master_core_id);
+/*		RTE_LCORE_FOREACH_SLAVE(i) {
+	    continue;
+	prf_lcore_conf[i].core_role = WORKER_CORE;
+	prf_lcore_conf[i].queue_id = ++j;
+	prf_nb_worker_cores++;
 		}
-
-		if(numOfCoresInMask < 2)
+*/
+		if(nb_lcores < 3)
 		{
-			logger().fatal("Minimum number of required cores is 2");
+			logger().fatal("Minimum number of required cores is 3");
 			return Poco::Util::Application::EXIT_CONFIG;
 		}
-		if(_num_of_readers + _num_of_workers > numOfCoresInMask)
+
+		if(_num_of_readers + _num_of_workers > nb_lcores-1)
 		{
-			logger().fatal("Number of cores (%d) is not enought for starting reader and worker threads (%d). Check the configuration.", (int) numOfCoresInMask, int (_num_of_readers + _num_of_workers));
+			logger().fatal("Number of cores (%d) is not enought for starting reader and worker threads (%d). Check the configuration.", (int) nb_lcores, int (_num_of_readers + _num_of_workers));
 			return Poco::Util::Application::EXIT_CONFIG;
 		}
-		if(_num_of_readers + _num_of_workers != numOfCoresInMask)
+
+		bool isPoolSizePowerOfTwoMinusOne = !(_BufPoolSize == 0) && !((_BufPoolSize+1) & (_BufPoolSize));
+		if (!isPoolSizePowerOfTwoMinusOne)
 		{
-			int total_workers = _num_of_readers + _num_of_workers;
-			tempCoreMask = _coreMaskToUse;
-			int z=1;
-			while (tempCoreMask > 0)
-			{
-				if (tempCoreMask & 1)
-				{
-					z++;
-					if(z == total_workers)
-						break;
-				}
-				tempCoreMask = tempCoreMask >> 1;
-			}
-			_coreMaskToUse = _coreMaskToUse & tempCoreMask;
+			logger().fatal("mBuf pool size must be a power of two minus one: n = (2^q - 1). It's currently: %d", (int)_BufPoolSize);
+			return Poco::Util::Application::EXIT_CONFIG;
 		}
-		// extract core vector from core mask
-		std::vector<pcpp::SystemCore> coresToUse;
-		pcpp::createCoreVectorFromCoreMask(_coreMaskToUse, coresToUse);
+
+		if(_dpdkPortVec.size() != 1)
+		{
+			logger().fatal("Number of input ethernet ports not equal to 1");
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
+
 		struct sigaction handler;
 		handler.sa_handler = handleSignal;
 		handler.sa_flags   = 0;
 		sigemptyset(&handler.sa_mask);
 		sigaction(SIGHUP, &handler, NULL);
 
-		// collect the list of DPDK devices
-		std::vector<pcpp::DpdkDevice*> dpdkDevicesToUse;
+
+		int nb_ports = rte_eth_dev_count();
+		if(nb_ports == 0)
+		{
+			logger().fatal("No ethernet ports detected");
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
+
+		struct rte_mempool *mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL",
+			_BufPoolSize*_dpdkPortVec.size(),
+			MBUF_CACHE_SIZE, // cache size
+			0,
+			RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
 		for (std::vector<int>::iterator iter = _dpdkPortVec.begin(); iter != _dpdkPortVec.end(); iter++)
 		{
-			pcpp::DpdkDevice* dev = pcpp::DpdkDeviceList::getInstance().getDeviceByPort(*iter);
-			if (dev == NULL)
+			struct ether_addr addr;
+			if(initPort(*iter, mbuf_pool, &addr) != 0)
 			{
-				logger().fatal("DPDK device for port %d doesn't exist", *iter);
-				return Poco::Util::Application::EXIT_OK;
-			}
-			//std::cout << "pushing device with port " << *iter << std::endl;
-			dpdkDevicesToUse.push_back(dev);
-		}
-
-		// go over all devices and open them
-		for (std::vector<pcpp::DpdkDevice*>::iterator iter = dpdkDevicesToUse.begin(); iter != dpdkDevicesToUse.end(); iter++)
-		{
-			//std::cout << "total num of rx queue: " << (*iter)->getTotalNumOfRxQueues() << " total num of tx queues: " << (*iter)->getTotalNumOfTxQueues() << std::endl;
-			if (!(*iter)->openMultiQueues(_nbRxQueues, 1))
-			{
-				logger().fatal("Couldn't open DPDK device #%d, PMD '%s'", (*iter)->getDeviceId(), (*iter)->getPMDName());
-				return Poco::Util::Application::EXIT_OK;
+				logger().fatal("Cannot initialize port %d", *iter);
+				return Poco::Util::Application::EXIT_CONFIG;
 			}
 		}
 
 
-		WorkerConfig workerConfigArr[coresToUse.size()];
-		prepareCoreConfiguration(dpdkDevicesToUse, coresToUse, workerConfigArr, coresToUse.size(), _num_of_readers, _nbRxQueues);
+		WorkerConfig workerConfigArr[nb_lcores-1];
+//		prepareCoreConfiguration(dpdkDevicesToUse, coresToUse, workerConfigArr, coresToUse.size(), _num_of_readers, _nbRxQueues);
 
 		// create worker thread for every core
-		std::vector<pcpp::DpdkWorkerThread*> workerThreadVec;
+		std::vector<DpdkWorkerThread*> workerThreadVec;
 
 		Distributor *distributor=new Distributor(_num_of_workers);
-		std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin();
+
+//		std::vector<pcpp::SystemCore>::iterator iter = coresToUse.begin();
 		// подгототавливаем readerы
-		uint32_t i = 0;
+		int i = 0;
 		for(i=0; i < _num_of_readers; i++)
 		{
 			std::string workerName("ReaderThread " + std::to_string(i));
 			logger().debug("Preparing thread '%s'", workerName);
+			workerConfigArr[i].port = _dpdkPortVec[0];
 			ReaderThread* newWorker = new ReaderThread(workerName, workerConfigArr[i], distributor);
 			workerThreadVec.push_back(newWorker);
-			iter++;
 		}
 		int num_of_workers=_num_of_workers;
 		int worker_id=0;
-		while(iter != coresToUse.end() && num_of_workers)
+		while(num_of_workers)
 		{
 			if(!_domainsFile.empty() && !_urlsFile.empty())
 			{
@@ -511,7 +534,6 @@ int extFilter::main(const ArgVec& args)
 			WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[i], mFlowHash, distributor, worker_id);
 			workerThreadVec.push_back(newWorker);
 			i++;
-			iter++;
 			num_of_workers--;
 			worker_id++;
 		}
@@ -521,13 +543,27 @@ int extFilter::main(const ArgVec& args)
 			tm.start(new SenderTask(_sender_params,i));
 
 		logger().debug("Starting worker threads...");
-		// start all worker threads from the end...
-		if (!pcpp::DpdkDeviceList::getInstance().startDpdkWorkerThreads(_coreMaskToUse, workerThreadVec))
+
+		int cur_lcore = rte_get_next_lcore(-1, 1, 0);
+		for (auto iter = workerThreadVec.begin(); iter != workerThreadVec.end(); iter++)
 		{
-			logger().fatal("Couldn't start worker threads");
-			return Poco::Util::Application::EXIT_OK;
+			logger().debug("Starting thread on core %d" ,cur_lcore);
+			if(cur_lcore == RTE_MAX_LCORE)
+			{
+				logger().fatal("There is no free core for launch thread");
+				return Poco::Util::Application::EXIT_CONFIG;
+			}
+			int err = rte_eal_remote_launch(dpdkWorkerThreadStart, *iter, cur_lcore);
+			if (err != 0)
+			{
+				logger().fatal("Unable to launch thread on core %d, error: %d", cur_lcore, err);
+				return Poco::Util::Application::EXIT_CONFIG;
+			}
+			logger().debug("Started thread on core %d" ,cur_lcore);
+			cur_lcore = rte_get_next_lcore(cur_lcore, 1, 0);
 		}
-		sleep(4);
+
+//		sleep(4);
 		// start readers...
 		for(auto it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 		{
@@ -536,21 +572,30 @@ int extFilter::main(const ArgVec& args)
 				dynamic_cast<ReaderThread*>(*it)->canRun(true);
 			}
 		}
+
 		tm.start(new StatisticTask(_statistic_interval, workerThreadVec, _statisticsFile));
 		tm.start(new ReloadTask(this, workerThreadVec));
 		waitForTerminationRequest();
-		pcpp::DpdkDeviceList::getInstance().stopDpdkWorkerThreads();
+
+		for (auto iter = workerThreadVec.begin(); iter != workerThreadVec.end(); iter++)
+		{
+			(*iter)->stop();
+			rte_eal_wait_lcore((*iter)->getCoreId());
+		}
+
+//		pcpp::DpdkDeviceList::getInstance().stopDpdkWorkerThreads();
+
 		tm.cancelAll();
 		SenderTask::queue.wakeUpAll();
 		tm.joinAll();
 		// stop worker threads
 
-		for (std::vector<pcpp::DpdkWorkerThread*>::iterator iter = workerThreadVec.begin(); iter != workerThreadVec.end(); iter++)
+/*		for (std::vector<pcpp::DpdkWorkerThread*>::iterator iter = workerThreadVec.begin(); iter != workerThreadVec.end(); iter++)
 		{
 			WorkerThread* thread = (WorkerThread*)(*iter);
 			delete thread;
 			
-		}
+		}*/
 	}
 	return Poco::Util::Application::EXIT_OK;
 }
@@ -842,6 +887,5 @@ void extFilter::loadHosts(std::string &fn, IPPortMap *ippm, Patricia *patricia)
 	hf.close();
 	logger().debug("Finish ip:port");
 }
-
 
 POCO_SERVER_MAIN(extFilter)

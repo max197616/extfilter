@@ -35,7 +35,7 @@ static struct timeval begin_time;
 
 static std::map<int,uint64_t> map_last_pkts;
 
-StatisticTask::StatisticTask(int sec, std::vector<pcpp::DpdkWorkerThread*> &workerThreadVector, std::string &statisticsFile):
+StatisticTask::StatisticTask(int sec, std::vector<DpdkWorkerThread*> &workerThreadVector, std::string &statisticsFile):
 	Task("StatisticTask"),
 	_sec(sec),
 	workerThreadVec(workerThreadVector),
@@ -120,7 +120,7 @@ void StatisticTask::OutStatistic()
 	{
 		os.open(_statisticsFile, std::ios::out | std::ios::trunc);
 	}
-	for(std::vector<pcpp::DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
+	for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 	{
 		int core=(int)(*it)->getCoreId();
 		// statistic for worker thread
@@ -189,18 +189,15 @@ void StatisticTask::OutStatistic()
 		{
 			const ThreadStats stats=(static_cast<ReaderThread*>(*it))->getStats();
 			WorkerConfig &config=(static_cast<ReaderThread*>(*it))->getConfig();
-			for (auto iter = config.InDataCfg.begin(); iter != config.InDataCfg.end(); iter++)
+			struct rte_eth_stats rteStats;
+			rte_eth_stats_get(config.port, &rteStats);
+			app.logger().information("Port %d input packets: %" PRIu64 ", input errors: %" PRIu64 ", mbuf errors: %" PRIu64, config.port, rteStats.ipackets, rteStats.ierrors, rteStats.rx_nombuf);
+			if(!_statisticsFile.empty())
 			{
-				struct rte_eth_stats rteStats;
-				rte_eth_stats_get(iter->first->getDeviceId(), &rteStats);
-				app.logger().information("Port %d input packets: %" PRIu64 ", input errors: %" PRIu64 ", mbuf errors: %" PRIu64, iter->first->getDeviceId(), rteStats.ipackets, rteStats.ierrors, rteStats.rx_nombuf);
-				if(!_statisticsFile.empty())
-				{
-					std::string worker_name("port."+std::to_string(iter->first->getDeviceId()));
-					os << worker_name << ".input_packets=" << rteStats.ipackets << std::endl;
-					os << worker_name << ".input_errors=" << rteStats.ierrors << std::endl;
-					os << worker_name << ".rx_nombuf=" << rteStats.rx_nombuf << std::endl;
-				}
+				std::string worker_name("port."+std::to_string(config.port));
+				os << worker_name << ".input_packets=" << rteStats.ipackets << std::endl;
+				os << worker_name << ".input_errors=" << rteStats.ierrors << std::endl;
+				os << worker_name << ".rx_nombuf=" << rteStats.rx_nombuf << std::endl;
 			}
 			uint64_t last_pkts=0;
 			std::map<int,uint64_t>::iterator it1=map_last_pkts.find(core);

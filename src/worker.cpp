@@ -1,11 +1,5 @@
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
-#include <TcpLayer.h>
-#include <UdpLayer.h>
-#include <DnsLayer.h>
-#include <IPv4Layer.h>
-#include <IPv6Layer.h>
-#include <PcapFileDevice.h>
 #include <netinet/in.h>
 #include <Poco/Stopwatch.h>
 #include <Poco/URI.h>
@@ -20,6 +14,7 @@
 #include <rte_udp.h>
 #include <rte_cycles.h>
 #include <rte_ip_frag.h>
+#include <memory>
 
 #include "worker.h"
 #include "main.h"
@@ -32,10 +27,9 @@
 
 //#define DEBUG_TIME
 
-static pcpp::PcapFileWriterDevice* pcapWriter = NULL;
 
 WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, Distributor *distr, int worker_id) :
-		m_WorkerConfig(workerConfig), m_Stop(true), m_CoreId(MAX_NUM_OF_CORES+1),
+		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
 		 m_FlowHash(fh),
 		_distr(distr),
@@ -94,7 +88,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
 			{
 				_logger.fatal("Not enough memory for the flow in the flows_pool");
-				throw Poco::Exception("Not enough memory for the flow in the flows_pool");
+				return NULL;
 			}
 			memset(newflow,0,sizeof(struct ndpi_flow_info));
 			newflow->last_seen = timestamp;
@@ -108,7 +102,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
 			{
 				_logger.fatal("Not enough memory for the flow");
-				throw Poco::Exception("Not enough memory for the flow");
+				return NULL;
 			}
 			ret = rte_hash_add_key(m_FlowHash->getIPv6Hash(), &key);
 			if(ret == -EINVAL)
@@ -116,8 +110,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				free(newflow->src_id);
 				free(newflow->dst_id);
 				free(newflow->ndpi_flow);
-				delete newflow;
-				_logger.error("Bad parameters in hash add");
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("Bad parameters in hash add");
 				return NULL;
 			}
 			if(ret == -ENOSPC)
@@ -125,8 +119,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				free(newflow->src_id);
 				free(newflow->dst_id);
 				free(newflow->ndpi_flow);
-				delete newflow;
-				_logger.error("There is no space in the ipv6 hash");
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("There is no space in the ipv6 flow hash");
 				return NULL;
 			}
 			ipv6_flows[ret] = newflow;
@@ -157,7 +151,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
 			{
 				_logger.fatal("Not enough memory for the flow in the flows_pool");
-				throw Poco::Exception("Not enough memory for the flow in the flows_pool");
+				return NULL;
 			}
 			memset(newflow,0,sizeof(struct ndpi_flow_info));
 			newflow->last_seen = timestamp;
@@ -171,7 +165,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
 			{
 				_logger.fatal("Not enough memory for the flow");
-				throw Poco::Exception("Not enough memory for the flow");
+				return NULL;
 			}
 			ret = rte_hash_add_key(m_FlowHash->getIPv4Hash(), &key);
 			if(ret == -EINVAL)
@@ -179,8 +173,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				free(newflow->src_id);
 				free(newflow->dst_id);
 				free(newflow->ndpi_flow);
-				delete newflow;
-				_logger.error("Bad parameters in hash add");
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("Bad parameters in hash add");
 				return NULL;
 			}
 			if(ret == -ENOSPC)
@@ -188,8 +182,8 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				free(newflow->src_id);
 				free(newflow->dst_id);
 				free(newflow->ndpi_flow);
-				delete newflow;
-				_logger.error("There is no space in the ipv4 hash");
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("There is no space in the ipv4 flow hash");
 				return NULL;
 			}
 			ipv4_flows[ret] = newflow;
@@ -365,8 +359,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	if(!flow_info)
 	{
-		_logger.fatal("Can't get flow info");
-		throw Poco::Exception("Can't get flow info");
+//		_logger.fatal("Flow info is null, can't proceed packet");
 		return false;
 	}
 
@@ -458,9 +451,6 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 				{
 					m_ThreadStats.matched_ssl++;
 					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", ssl_client, match.id, src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-//					if (pcapWriter)
-//						pcapWriter->writePacket(*(parsedPacket.getRawPacket()));
-
 					std::string empty_str;
 					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 					m_ThreadStats.sended_rst++;
@@ -513,8 +503,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 						uri.assign(uri_p.toString());
 					} catch (Poco::SyntaxException &ex)
 					{
-						_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), flow_info->ndpi_flow->http.url);
 						uri.assign(flow_info->ndpi_flow->http.url);
+						_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
 					}
 				} else {
 					uri.assign(flow_info->ndpi_flow->http.url);
@@ -632,7 +622,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 bool WorkerThread::run(uint32_t coreId)
 {
-	m_CoreId = coreId;
+	setCoreId(coreId);
+//	m_CoreId = coreId;
 	m_Stop = false;
 	struct rte_mbuf *buf;
 
@@ -645,14 +636,6 @@ bool WorkerThread::run(uint32_t coreId)
 
 	_logger.debug("gc_budget = %d",gc_budget);
 
-	if (!m_WorkerConfig.PathToWritePackets.empty())
-	{
-		pcapWriter = new pcpp::PcapFileWriterDevice(m_WorkerConfig.PathToWritePackets.c_str());
-		if (!pcapWriter->open())
-		{
-			_logger.error("Couldn't open pcap writer device");
-		}
-	}
 	uint64_t cur_tsc,diff_gc_tsc;
 	uint64_t prev_gc_tsc=0;
 	_logger.debug("Starting working thread on core %u", coreId);
@@ -724,8 +707,6 @@ bool WorkerThread::run(uint32_t coreId)
 			prev_gc_tsc = cur_tsc;
 		}
 	}
-	if (pcapWriter != NULL)
-		delete pcapWriter;
 	_logger.debug("Worker thread on core %u terminated", coreId);
 	return true;
 }
