@@ -16,8 +16,7 @@ extFilter
 
 - Poco >= 1.6
 - nDPI = git dev (устанавливается автоматически)
-- PcapPlusPlus = git master (устанавливается автоматически)
-- DPDK = 16.07
+- DPDK = 16.11.1
 - git
 
 Сборка
