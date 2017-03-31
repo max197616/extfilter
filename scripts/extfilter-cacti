@@ -126,7 +126,10 @@ esac
 
 done
 
-
+if [ ! -d $datadir ]
+ then
+  /usr/bin/mkdir $datadir
+fi
 
 readers_stat=$p_reader_received_packets":"$reader_received_packets\
 " "$p_reader_enqueued_packets":"$reader_enqueued_packets\
