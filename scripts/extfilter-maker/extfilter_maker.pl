@@ -237,6 +237,11 @@ while (my $ips = $sth->fetchrow_hashref())
 	$url11 =~ s/^(.*)\#(.*)$/$1/g;
 	$url2 =~ s/^(.*)\#(.*)$/$1/g;
 
+	if((my $idx=index($url2,"&#")) != -1)
+	{
+		$url2 = substr($url2,0,$idx);
+	}
+
 	$url2 .= "/" if($url2 !~ /\//);
 
 	$url11 =~ s/\/+/\//g;
