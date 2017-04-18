@@ -22,7 +22,7 @@
 #include "main.h"
 #include "AhoCorasickPlus.h"
 #include "worker.h"
-
+#include "acl.h"
 
 Poco::Event ReloadTask::_event;
 
@@ -49,6 +49,14 @@ void ReloadTask::runTask()
 		if(_event.tryWait(300))
 		{
 			_logger.information("Reloading data from files...");
+
+			if(_parent->getACL()->initACL(_parent->getHostsFile(), _parent->getSSLIpsFile(), _parent->extFilter::getNuma()) != 0)
+			{
+				_logger.error("Unable to reload ACLs");
+			} else {
+				_logger.information("ACLs successfully reloaded");
+			}
+
 			for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 			{
 				if(dynamic_cast<WorkerThread*>(*it) == nullptr)
@@ -106,49 +114,6 @@ void ReloadTask::runTask()
 						_logger.error("Got exception while reload domains and urls data: %s", excep.displayText());
 						delete atm_new;
 						delete datas_new;
-					}
-				}
-				if(!_parent->getHostsFile().empty())
-				{
-					IPPortMap *ip_port_map = new IPPortMap;
-					Patricia *newp = new Patricia();
-					try
-					{
-						IPPortMap *old;
-						Patricia *old_p;
-						_parent->loadHosts(_parent->getHostsFile(),ip_port_map,newp);
-						config.ipportMapLock.lock();
-						old = config.ipportMap;
-						old_p = config.ipPortMap;
-						config.ipportMap = ip_port_map;
-						config.ipPortMap = newp;
-						config.ipportMapLock.unlock();
-						delete old;
-						delete old_p;
-						_logger.information("Reloaded data for ip port list for core %u", (*it)->getCoreId());
-					} catch (Poco::Exception &excep)
-					{
-						_logger.error("Got exception while reload ip port data: %s", excep.displayText());
-						delete ip_port_map;
-					}
-				}
-				if(!_parent->getSSLIpsFile().empty() && config.block_undetected_ssl)
-				{
-					Patricia *ssl_ips = new Patricia;
-					try
-					{
-						_parent->loadSSLIP(_parent->getSSLIpsFile(),ssl_ips);
-						Patricia *ssl_ips_old;
-						config.sslIPsLock.lock();
-						ssl_ips_old = config.sslIPs;
-						config.sslIPs = ssl_ips;
-						config.sslIPsLock.unlock();
-						delete ssl_ips_old;
-						_logger.information("Reloaded data for ssl ip list for core %u", (*it)->getCoreId());
-					} catch (Poco::Exception &excep)
-					{
-						_logger.error("Got exception while reload ip ssl data: %s", excep.displayText());
-						delete ssl_ips;
 					}
 				}
 			}

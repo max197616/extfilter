@@ -46,13 +46,13 @@ void SenderTask::runTask()
 		Poco::Notification::Ptr pNf(queue.waitDequeueNotification());
 		if (pNf)
 		{
-			RedirectNotification::Ptr pRedirectNf = pNf.cast<RedirectNotification>();
+			RedirectNotificationG::Ptr pRedirectNf = pNf.cast<RedirectNotificationG>();
 			if (pRedirectNf)
 			{
 				if(pRedirectNf->is_rst())
-					sender->SendRST(pRedirectNf->user_port(), pRedirectNf->dst_port(),pRedirectNf->user_ip(),pRedirectNf->dst_ip(), pRedirectNf->acknum(), pRedirectNf->seqnum(), pRedirectNf->f_psh());
+					sender->SendRST(pRedirectNf->user_port(), pRedirectNf->dst_port(),pRedirectNf->user_ip(),pRedirectNf->dst_ip(), pRedirectNf->ip_version(), pRedirectNf->acknum(), pRedirectNf->seqnum(), pRedirectNf->f_psh());
 				else
-					sender->Redirect(pRedirectNf->user_port(), pRedirectNf->dst_port(),pRedirectNf->user_ip(),pRedirectNf->dst_ip(), pRedirectNf->acknum(), pRedirectNf->seqnum(), pRedirectNf->f_psh(), pRedirectNf->additional_param());
+					sender->Redirect(pRedirectNf->user_port(), pRedirectNf->dst_port(),pRedirectNf->user_ip(),pRedirectNf->dst_ip(), pRedirectNf->ip_version(), pRedirectNf->acknum(), pRedirectNf->seqnum(), pRedirectNf->f_psh(), pRedirectNf->additional_param());
 			}
 		}
 	}

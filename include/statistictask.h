@@ -25,7 +25,7 @@
 class StatisticTask: public Poco::Task
 {
 public:
-	StatisticTask(int sec, std::vector<DpdkWorkerThread*>& workerThreadVector, std::string &statisticsFile);
+	StatisticTask(int sec, std::vector<DpdkWorkerThread*>& workerThreadVector, std::string &statisticsFile, std::vector<uint8_t> &ports);
 	void runTask();
 	void OutStatistic();
 
@@ -33,6 +33,7 @@ private:
 	int _sec;
 	std::vector<DpdkWorkerThread*>& workerThreadVec;
 	std::string _statisticsFile;
+	std::vector<uint8_t> _ports;
 };
 
 

@@ -2,15 +2,44 @@
 
 #include <Poco/Util/ServerApplication.h>
 #include <Poco/HashMap.h>
+#include <rte_common.h>
+#include <rte_memory.h>
 #include "dtypes.h"
 #include "sender.h"
 
 #define DEFAULT_MBUF_POOL_SIZE 8191
-#define DEFAULT_RING_SIZE 4096
-
+#define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_LCORE_PARAMS 1024
+#define NB_SOCKETS 4
+#define MAX_RX_QUEUE_PER_PORT 128
+#define RTE_TEST_RX_DESC_DEFAULT 128
+#define RTE_TEST_TX_DESC_DEFAULT 512
 
 class AhoCorasickPlus;
 class Patricia;
+class ACL;
+
+struct lcore_params {
+	uint8_t port_id;
+	uint8_t queue_id;
+	uint8_t lcore_id;
+} __rte_cache_aligned;
+
+struct lcore_rx_queue {
+	uint8_t port_id;
+	uint8_t queue_id;
+} __rte_cache_aligned;
+
+struct lcore_conf {
+	uint16_t n_rx_queue;
+	struct lcore_rx_queue rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
+	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
+	struct rte_acl_ctx *cur_acx_ipv4, *new_acx_ipv4;
+	struct rte_acl_ctx *cur_acx_ipv6, *new_acx_ipv6;
+	// TODO add WorkerConfig???
+/*	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];*/
+} __rte_cache_aligned;
+
 
 class extFilter: public Poco::Util::ServerApplication
 {
@@ -39,17 +68,6 @@ public:
 	    Load URLs for blocking.
 	**/
 	void loadURLs(std::string &fn, AhoCorasickPlus *dm_atm);
-
-	/**
-	    Load IP SSL for blocking.
-	**/
-	void loadSSLIP(const std::string &fn, Patricia *patricia);
-
-	/**
-	    Load IP:port for blocking.
-	**/
-	void loadHosts(std::string &fn, IPPortMap *ippm, Patricia *patricia);
-
 
 	/**
 	    Load domains and urls into one database.
@@ -85,16 +103,43 @@ public:
 	{
 		return _tsc_hz;
 	}
-	
-	uint32_t _BufPoolSize = DEFAULT_MBUF_POOL_SIZE;
-	std::vector<int> _dpdkPortVec;
-	
+
+	static inline struct rte_mempool *getPktInfoPool()
+	{
+		return packet_info_pool[rte_socket_id()];
+	}
+
+	static inline struct lcore_conf *getLcoreConf(uint32_t lcore_id)
+	{
+		return &_lcore_conf[lcore_id];
+	}
+
+	inline ACL * getACL()
+	{
+		return _acl;
+	}
+
+	inline int getNuma()
+	{
+		return _numa_on;
+	}
+
+	static rte_mempool *packet_info_pool[NB_SOCKETS];
+
+	static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 private:
-	int initPort(int port, struct rte_mempool *mbuf_pool, struct ether_addr *addr);
+	int initPort(uint8_t port, struct ether_addr *addr);
+	int initMemory(uint8_t nb_ports);
+	int initACL();
+
+	uint8_t _get_ports_n_rx_queues(void);
+	uint8_t _get_port_n_rx_queues(uint8_t port);
+	int _init_lcore_rx_queues(void);
+	int _check_lcore_params(void);
+	int _check_port_config(const unsigned nb_ports);
 
 	bool _helpRequested;
 	bool _listDPDKPorts;
-	int _nbRxQueues;
 
 	std::string _urlsFile;
 	std::string _domainsFile;
@@ -111,10 +156,7 @@ private:
 	bool _url_normalization;
 	bool _remove_dot;
 
-	int _num_of_readers;
-	int _num_of_workers;
 	int _statistic_interval;
-	uint32_t _ring_size;
 	enum ADD_P_TYPES _add_p_type;
 	struct CSender::params _sender_params;
 	
@@ -123,6 +165,21 @@ private:
 	uint32_t _flowhash_size_per_worker;
 
 	int _num_of_senders;
+
+	int _numa_on;
+	uint32_t _enabled_port_mask;
+
+	struct lcore_params _lcore_params_array[MAX_LCORE_PARAMS];
+	static struct lcore_conf _lcore_conf[RTE_MAX_LCORE];
+	uint16_t _nb_lcore_params;
+	struct lcore_params* _lcore_params;
+	struct rte_mempool* _pktmbuf_pool[NB_SOCKETS];
+
+	uint16_t _nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+	uint16_t _nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+	unsigned _nb_ports;
+
+	ACL *_acl;
 };
 
 

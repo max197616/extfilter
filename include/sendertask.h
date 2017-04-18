@@ -95,6 +95,98 @@ private:
 	bool _is_rst;
 };
 
+
+class RedirectNotificationG: public Poco::Notification
+	// The notification sent to worker threads.
+{
+public:
+	typedef Poco::AutoPtr<RedirectNotificationG> Ptr;
+	
+	RedirectNotificationG(int user_port, int dst_port, void *user_ip, void *dst_ip, int ip_version, uint32_t acknum, uint32_t seqnum, int f_psh, char *additional_param, bool is_rst=false):
+		_user_port(user_port),
+		_dst_port(dst_port),
+		_ip_version(ip_version),
+		_acknum(acknum),
+		_seqnum(seqnum),
+		_f_psh(f_psh),
+		_is_rst(is_rst)
+	{
+		if(_ip_version == 4)
+		{
+			_user_ip.ipv4 = *(uint32_t *)user_ip;
+			_dst_ip.ipv4 = *(uint32_t *)dst_ip;
+		} else if(_ip_version == 6)
+		{
+			_user_ip.ipv6 = _mm_loadu_si128((__m128i *)user_ip);
+			_dst_ip.ipv6 = _mm_loadu_si128((__m128i *)dst_ip);
+		}
+		if(additional_param)
+		{
+			_additional_param.assign(additional_param);
+		}
+	}
+	int user_port()
+	{
+		return _user_port;
+	}
+	int dst_port()
+	{
+		return _dst_port;
+	}
+	u_int32_t acknum()
+	{
+		return _acknum;
+	}
+	u_int32_t seqnum()
+	{
+		return _seqnum;
+	}
+	int f_psh()
+	{
+		return _f_psh;
+	}
+	std::string &additional_param()
+	{
+		return _additional_param;
+	}
+	bool is_rst()
+	{
+		return _is_rst;
+	}
+	void *user_ip()
+	{
+		return &_user_ip;
+	}
+	void *dst_ip()
+	{
+		return &_dst_ip;
+	}
+	int ip_version()
+	{
+		return _ip_version;
+	}
+private:
+	int _user_port;
+	int _dst_port;
+	union
+	{
+		uint32_t ipv4;
+		__m128i ipv6;
+	} _user_ip;
+	union
+	{
+		uint32_t ipv4;
+		__m128i ipv6;
+	} _dst_ip;
+	int _ip_version;
+	uint32_t _acknum;
+	uint32_t _seqnum;
+	int _f_psh;
+	std::string _additional_param;
+	bool _is_rst;
+};
+
+
 /// Данная задача отсылает редирект заданному клиенту
 class SenderTask: public Poco::Task
 {

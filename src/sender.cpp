@@ -23,6 +23,7 @@
 #include <Poco/FileStream.h>
 #include <rte_config.h>
 #include <rte_ip.h>
+#include <memory>
 
 struct pseudo_header
 {
@@ -184,6 +185,21 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 	return;
 }
 
+void CSender::Redirect(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param)
+{
+	std::unique_ptr<Poco::Net::IPAddress> _ip_from;
+	std::unique_ptr<Poco::Net::IPAddress> _ip_to;
+	if(ip_ver == 4)
+	{
+		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in_addr)));
+		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in_addr)));
+	} else {
+		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in6_addr)));
+		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in6_addr)));
+	}
+	Redirect(user_port, dst_port, *_ip_from, *_ip_to, acknum, seqnum, f_psh, additional_param);
+}
+
 //void CSender::sendPacket(char *ip_from, char *ip_to, int port_from, int port_to, uint32_t acknum, uint32_t seqnum)
 void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param )
 {
@@ -202,6 +218,21 @@ void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_i
 		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
 	}
 	return;
+}
+
+void CSender::SendRST(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh)
+{
+	std::unique_ptr<Poco::Net::IPAddress> _ip_from;
+	std::unique_ptr<Poco::Net::IPAddress> _ip_to;
+	if(ip_ver == 4)
+	{
+		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in_addr)));
+		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in_addr)));
+	} else {
+		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in6_addr)));
+		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in6_addr)));
+	}
+	SendRST(user_port, dst_port, *_ip_from, *_ip_to, acknum, seqnum, f_psh);
 }
 
 void CSender::SendRST(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh)

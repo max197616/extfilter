@@ -52,8 +52,10 @@ public:
 	CSender(struct params &prm);
 	~CSender();
 	void Redirect(int user_port, int dst_port, Poco::Net::IPAddress &src_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param);
+	void Redirect(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param);
 	void sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip_to, int port_from, int port_to, uint32_t acknum, uint32_t seqnum, std::string &dt, int f_reset, int f_psh);
 	void SendRST(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh);
+	void SendRST(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh);
 private:
 	int s;
 	int s6;

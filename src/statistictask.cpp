@@ -35,11 +35,12 @@ static struct timeval begin_time;
 
 static std::map<int,uint64_t> map_last_pkts;
 
-StatisticTask::StatisticTask(int sec, std::vector<DpdkWorkerThread*> &workerThreadVector, std::string &statisticsFile):
+StatisticTask::StatisticTask(int sec, std::vector<DpdkWorkerThread*> &workerThreadVector, std::string &statisticsFile, std::vector<uint8_t> &ports):
 	Task("StatisticTask"),
 	_sec(sec),
 	workerThreadVec(workerThreadVector),
-	_statisticsFile(statisticsFile)
+	_statisticsFile(statisticsFile),
+	_ports(ports)
 {
 }
 
@@ -107,8 +108,9 @@ void StatisticTask::OutStatistic()
 	uint64_t active_flows=0;
 	uint64_t deleted_flows=0;
 	uint64_t r_received_packets=0;
-	uint64_t r_enqueued_packets=0;
 	uint64_t r_missed_packets=0;
+	uint64_t r_rx_nombuf = 0;
+	uint64_t r_ierrors = 0;
 	uint64_t ipv4_fragments=0;
 	uint64_t ipv6_fragments=0;
 	uint64_t ipv4_short_packets=0;
@@ -119,6 +121,16 @@ void StatisticTask::OutStatistic()
 	if(!_statisticsFile.empty())
 	{
 		os.open(_statisticsFile, std::ios::out | std::ios::trunc);
+	}
+	for(const auto &port : _ports)
+	{
+		struct rte_eth_stats rteStats;
+		rte_eth_stats_get(port, &rteStats);
+		app.logger().information("Port %d input packets %" PRIu64 ", input errors: %" PRIu64 ", mbuf errors: %" PRIu64 ", missed packets: %" PRIu64, (int)port, rteStats.ipackets, rteStats.ierrors, rteStats.rx_nombuf, rteStats.imissed);
+		r_received_packets += rteStats.ipackets;
+		r_missed_packets += rteStats.imissed;
+		r_rx_nombuf += rteStats.rx_nombuf;
+		r_ierrors += rteStats.ierrors;
 	}
 	for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 	{
@@ -185,39 +197,6 @@ void StatisticTask::OutStatistic()
 				os << worker_name << ".ipv4_short_packets=" << stats.ipv4_short_packets << std::endl;
 			}
 		}
-		if(dynamic_cast<ReaderThread*>(*it) != nullptr)
-		{
-			const ThreadStats stats=(static_cast<ReaderThread*>(*it))->getStats();
-			WorkerConfig &config=(static_cast<ReaderThread*>(*it))->getConfig();
-			struct rte_eth_stats rteStats;
-			rte_eth_stats_get(config.port, &rteStats);
-			app.logger().information("Port %d input packets: %" PRIu64 ", input errors: %" PRIu64 ", mbuf errors: %" PRIu64, config.port, rteStats.ipackets, rteStats.ierrors, rteStats.rx_nombuf);
-			if(!_statisticsFile.empty())
-			{
-				std::string worker_name("port."+std::to_string(config.port));
-				os << worker_name << ".input_packets=" << rteStats.ipackets << std::endl;
-				os << worker_name << ".input_errors=" << rteStats.ierrors << std::endl;
-				os << worker_name << ".rx_nombuf=" << rteStats.rx_nombuf << std::endl;
-			}
-			uint64_t last_pkts=0;
-			std::map<int,uint64_t>::iterator it1=map_last_pkts.find(core);
-			if(it1 != map_last_pkts.end())
-				last_pkts = it1->second;
-			uint64_t tot_usec = end.tv_sec*1000000 + end.tv_usec - (begin_time.tv_sec*1000000 + begin_time.tv_usec);
-			float t = (float)((stats.total_packets-last_pkts)*1000000)/(float)tot_usec;
-			map_last_pkts[core]=stats.total_packets;
-			app.logger().information("Reader thread on core %d received packets: %" PRIu64 ", enqueued packets: %" PRIu64 ", missed packets: %" PRIu64 ", traffic throughtput: %s pps", core, stats.total_packets, stats.enqueued_packets, stats.missed_packets, formatPackets(t));
-			if(!_statisticsFile.empty())
-			{
-				std::string worker_name("reader.core."+std::to_string(core));
-				os << worker_name << ".received_packets=" << stats.total_packets << std::endl;
-				os << worker_name << ".enqueued_packets=" << stats.enqueued_packets << std::endl;
-				os << worker_name << ".missed_packets=" << stats.missed_packets << std::endl;
-			}
-			r_received_packets += stats.total_packets;
-			r_enqueued_packets += stats.enqueued_packets;
-			r_missed_packets += stats.missed_packets;
-		}
 	}
 	gettimeofday(&begin_time, NULL);
 	app.logger().information("All worker threads seen packets: %" PRIu64 ", IP packets: %" PRIu64 " (IPv4 packets: %" PRIu64 ", IPv6 packets: %" PRIu64 "), seen bytes: %" PRIu64 ", traffic throughtput: %s pps", total_packets, ip_packets, ipv4_packets, ipv6_packets, bytes, formatPackets(traffic_throughput));
@@ -244,15 +223,17 @@ void StatisticTask::OutStatistic()
 		os << worker_name << ".ipv6_fragments=" << ipv6_fragments << std::endl;
 		os << worker_name << ".ipv4_short_packets=" << ipv4_short_packets << std::endl;
 		
-		worker_name.assign("allreaders");
+		worker_name.assign("allports");
 		os << worker_name << ".received_packets=" << r_received_packets << std::endl;
-		os << worker_name << ".enqueued_packets=" << r_enqueued_packets << std::endl;
 		os << worker_name << ".missed_packets=" << r_missed_packets << std::endl;
+		os << worker_name << ".rx_nombuf=" << r_rx_nombuf << std::endl;
+		os << worker_name << ".ierrors=" << r_ierrors << std::endl;
 	}
 	if(!_statisticsFile.empty())
 	{
 		os.close();
 	}
+
 }
 
 void StatisticTask::runTask()

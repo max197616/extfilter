@@ -14,34 +14,33 @@
 #include <rte_udp.h>
 #include <rte_cycles.h>
 #include <rte_ip_frag.h>
+#include <rte_ethdev.h>
 #include <memory>
 
 #include "worker.h"
 #include "main.h"
 #include "sendertask.h"
 #include "flow.h"
-#include "distributor.h"
+#include "acl.h"
 #include <rte_hash.h>
 
 #define tcphdr(x)	((struct tcphdr *)(x))
 
 //#define DEBUG_TIME
 
-
-WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, Distributor *distr, int worker_id) :
+WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, int socketid) :
 		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
-		 m_FlowHash(fh),
-		_distr(distr),
-		_worker_id(worker_id)
+		 m_FlowHash(fh)
 {
-	ipv4_flows = (struct ndpi_flow_info **)calloc(fh->getHashSize(),sizeof(struct ndpi_flow_info *));
+	ipv4_flows = (struct ndpi_flow_info **)rte_zmalloc_socket("IPv4Flows", fh->getHashSize()*sizeof(struct ndpi_flow_info *), RTE_CACHE_LINE_SIZE, socketid);
 	if(ipv4_flows == nullptr)
 	{
 		_logger.fatal("Not enough memory for ipv4 flows");
 		throw Poco::Exception("Not enough memory for ipv4 flows");
 	}
-	ipv6_flows = (struct ndpi_flow_info **)calloc(fh->getHashSize(),sizeof(struct ndpi_flow_info *));
+
+	ipv6_flows = (struct ndpi_flow_info **)rte_zmalloc_socket("IPv6Flows", fh->getHashSize()*sizeof(struct ndpi_flow_info *), RTE_CACHE_LINE_SIZE, socketid);
 	if(ipv6_flows == nullptr)
 	{
 		_logger.fatal("Not enough memory for ipv6 flows");
@@ -49,7 +48,7 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 	}
 	_logger.debug("Allocating %d bytes for flow pool", (int) (fh->getHashSize()*2*sizeof(struct ndpi_flow_info)));
 	std::string mempool_name("flows_pool_" + name);
-	flows_pool = rte_mempool_create(mempool_name.c_str(), fh->getHashSize()*2, sizeof(struct ndpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_socket_id(), 0);
+	flows_pool = rte_mempool_create(mempool_name.c_str(), fh->getHashSize()*2, sizeof(struct ndpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, socketid, 0);
 	if(flows_pool == nullptr)
 	{
 		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes", (int) (fh->getHashSize()*2*sizeof(struct ndpi_flow_info)));
@@ -60,21 +59,19 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 
 WorkerThread::~WorkerThread()
 {
-	free(ipv4_flows);
-	free(ipv6_flows);
+	rte_free(ipv4_flows);
+	rte_free(ipv6_flows);
 	rte_mempool_free(flows_pool);
 }
 
-ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64_t timestamp)
+ndpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, int ip_version, uint64_t timestamp, int32_t *idx, uint32_t sig)
 {
 	if(ip_version == 6)
 	{
-		struct ipv6_5tuple key;
-		struct ipv6_hdr *ipv6_header = (struct ipv6_hdr *) ip_header;
-		m_FlowHash->makeIPv6Key(ipv6_header,&key);
-		int32_t ret = rte_hash_lookup(m_FlowHash->getIPv6Hash(), &key);
+		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
 		if(ret >= 0)
 		{
+			*idx = ret;
 			return ipv6_flows[ret];
 		}
 		if(ret == -EINVAL)
@@ -95,7 +92,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->ip_version = 6;
 			newflow->cli2srv_direction = true;
 			newflow->block = false;
-			memcpy(&newflow->keys.ipv6_key, &key, sizeof(struct ipv6_5tuple));
+//			memcpy(&newflow->keys.ipv6_key, &host_key, sizeof(union ipv6_5tuple_host));
 			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
@@ -104,7 +101,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				_logger.fatal("Not enough memory for the flow");
 				return NULL;
 			}
-			ret = rte_hash_add_key(m_FlowHash->getIPv6Hash(), &key);
+			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
 			if(ret == -EINVAL)
 			{
 				free(newflow->src_id);
@@ -124,6 +121,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				return NULL;
 			}
 			ipv6_flows[ret] = newflow;
+			*idx = ret;
 			m_ThreadStats.ndpi_ipv6_flows_count++;
 			m_ThreadStats.ndpi_flows_count++;
 			return newflow;
@@ -132,12 +130,10 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 	}
 	if(ip_version == 4)
 	{
-		struct ipv4_5tuple key;
-		struct ipv4_hdr *ipv4_header = (struct ipv4_hdr *) ip_header;
-		m_FlowHash->makeIPv4Key(ipv4_header,&key);
-		int32_t ret = rte_hash_lookup(m_FlowHash->getIPv4Hash(), &key);
+		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
 		if(ret >= 0)
 		{
+			*idx = ret;
 			return ipv4_flows[ret];
 		}
 		if(ret == -EINVAL)
@@ -158,7 +154,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 			newflow->ip_version = 4;
 			newflow->cli2srv_direction = true;
 			newflow->block = false;
-			memcpy(&newflow->keys.ipv4_key, &key, sizeof(struct ipv4_5tuple));
+//			rte_memcpy(&newflow->keys.ipv4_key, &host_key, sizeof(union ipv4_5tuple_host));
 			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
 			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
@@ -167,7 +163,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				_logger.fatal("Not enough memory for the flow");
 				return NULL;
 			}
-			ret = rte_hash_add_key(m_FlowHash->getIPv4Hash(), &key);
+			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
 			if(ret == -EINVAL)
 			{
 				free(newflow->src_id);
@@ -187,6 +183,7 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 				return NULL;
 			}
 			ipv4_flows[ret] = newflow;
+			*idx = ret;
 			m_ThreadStats.ndpi_ipv4_flows_count++;
 			m_ThreadStats.ndpi_flows_count++;
 			return newflow;
@@ -198,51 +195,36 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *ip_header, int ip_version, uint64
 
 
 
-bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
+bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 {
-	struct ether_hdr *eth_hdr;
-	uint16_t ether_type;
 	uint8_t *l3;
 	uint16_t l4_packet_len;
 	uint16_t payload_len;
-	struct ipv4_hdr *ipv4_header;
-	struct ipv6_hdr *ipv6_header;
+	struct ipv4_hdr *ipv4_header=nullptr;
+	struct ipv6_hdr *ipv6_header=nullptr;
 	int size=rte_pktmbuf_pkt_len(m);
-
-	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
-	ether_type = rte_be_to_cpu_16(eth_hdr->ether_type);
-	l3 = (uint8_t *)eth_hdr + sizeof(struct ether_hdr);
 
 	int ip_version=0;
 	uint32_t ip_len;
 	int iphlen=0;
 
-	if(ether_type == ETHER_TYPE_VLAN || ether_type == 0x8847)
+//	uint32_t tcp_or_udp = m->packet_type & (RTE_PTYPE_L4_TCP | RTE_PTYPE_L4_UDP);
+	uint32_t l3_ptypes = m->packet_type & RTE_PTYPE_L3_MASK;
+
+	if(!m->userdata)
 	{
-		while(1)
-		{
-			if(ether_type == ETHER_TYPE_VLAN)
-			{
-				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(l3);
-				ether_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
-				l3 += sizeof(struct vlan_hdr);
-			} else if(ether_type == 0x8847)
-			{
-				uint8_t bos;
-				bos = ((uint8_t *)eth_hdr)[2] & 0x1;
-				eth_hdr = rte_pktmbuf_mtod_offset(m, struct ether_hdr *,4);
-				if(bos)
-				{
-					ether_type = ETHER_TYPE_IPv4;
-					break;
-				}
-			} else
-				break;
-		}
+		_logger.error("Userdata is null");
+		return false;
 	}
 
+
+	struct packet_info *pkt_info = (struct packet_info *) m->userdata;
+	l3 = pkt_info->l3;
+
+	uint64_t timestamp = pkt_info->timestamp;
+
 	// определяем версию протокола
-	if (ether_type == ETHER_TYPE_IPv4)
+	if (l3_ptypes == RTE_PTYPE_L3_IPV4)
 	{
 		ip_version = 4;
 		m_ThreadStats.ipv4_packets++;
@@ -260,7 +242,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 			m_ThreadStats.ipv4_fragments++;
 			return false;
 		}
-	} else if (ether_type == ETHER_TYPE_IPv6)
+	} else if (l3_ptypes == RTE_PTYPE_L3_IPV6)
 	{
 		ip_version=6;
 		m_ThreadStats.ipv6_packets++;
@@ -316,6 +298,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	int tcp_src_port=rte_be_to_cpu_16(tcph->source);
 	int tcp_dst_port=rte_be_to_cpu_16(tcph->dest);
 
+#ifdef __DEBUG_WORKER
 	std::unique_ptr<Poco::Net::IPAddress> src_ip;
 	std::unique_ptr<Poco::Net::IPAddress> dst_ip;
 	if(ip_version == 4)
@@ -326,36 +309,25 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		src_ip.reset(new Poco::Net::IPAddress(&ipv6_header->src_addr,sizeof(in6_addr)));
 		dst_ip.reset(new Poco::Net::IPAddress(&ipv6_header->dst_addr,sizeof(in6_addr)));
 	}
-
-
-	if(m_WorkerConfig.ipportMap && m_WorkerConfig.ipportMapLock.tryLock())
+#endif
+	if(pkt_info->acl_res == ACL::ACL_DROP)
 	{
-	
-		if(m_WorkerConfig.ipPortMap->try_search_exact_ip(*dst_ip.get()))
-		{
-
-			IPPortMap::iterator it_ip=m_WorkerConfig.ipportMap->find(*dst_ip.get());
-			if(it_ip != m_WorkerConfig.ipportMap->end())
-			{
-				unsigned short port=tcp_dst_port;
-				if (it_ip->second.size() == 0 || it_ip->second.find(port) != it_ip->second.end())
-				{
-					m_WorkerConfig.ipportMapLock.unlock();
-					m_ThreadStats.matched_ip_port++;
-					_logger.debug("Found record in ip:port list for the client %s:%d and server %s:%d",src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-					std::string empty_str;
-					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(),/*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
-					m_ThreadStats.sended_rst++;
-					return true;
-				}
-			}
-		}
-		m_WorkerConfig.ipportMapLock.unlock();
+		m_ThreadStats.matched_ip_port++;
+#ifdef _DEBUG_WORKER
+		_logger.debug("Found record in ip:port list for the client %s:%d and server %s:%d",src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
+#endif
+		SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+		m_ThreadStats.sended_rst++;
+		return true;
 	}
 	/* setting time */
 	uint64_t packet_time = timestamp;
-
-	ndpi_flow_info *flow_info = getFlow(l3, ip_version, timestamp);
+	int32_t hash_idx;
+	ndpi_flow_info *flow_info = nullptr;
+	if(m->userdata)
+	{
+		flow_info = getFlow((uint8_t *)&((struct packet_info *)m->userdata)->keys, ip_version, timestamp, &hash_idx, m->hash.usr);
+	}
 
 	if(!flow_info)
 	{
@@ -450,9 +422,10 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 				if(found)
 				{
 					m_ThreadStats.matched_ssl++;
+#ifdef _DEBUG_WORKER
 					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", ssl_client, match.id, src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-					std::string empty_str;
-					SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+#endif
+					SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
 					m_ThreadStats.sended_rst++;
 					flow_info->block=true;
 					return true;
@@ -461,20 +434,16 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 				}
 			} else if(m_WorkerConfig.block_undetected_ssl)
 			{
-				if(m_WorkerConfig.sslIPsLock.tryLock())
+				if(pkt_info->acl_res == ACL::ACL_SSL)
 				{
-					if(m_WorkerConfig.sslIPs->try_search_exact_ip(*dst_ip.get()))
-					{
-						m_WorkerConfig.sslIPsLock.unlock();
-						m_ThreadStats.matched_ssl_ip++;
-						_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-						m_ThreadStats.sended_rst++;
-						std::string empty_str;
-						SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
-						flow_info->block=true;
-						return true;
-					}
-					m_WorkerConfig.sslIPsLock.unlock();
+					m_ThreadStats.matched_ssl_ip++;
+#ifdef _DEBUG_WORKER
+					_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
+#endif
+					m_ThreadStats.sended_rst++;
+					SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+					flow_info->block=true;
+					return true;
 				}
 			}
 		}
@@ -575,11 +544,11 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 									break;
 								default: break;
 							}
-							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
+//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
 							m_ThreadStats.redirected_domains++;
 						} else {
-							std::string empty_str;
-							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
 							m_ThreadStats.sended_rst++;
 						}
 						return true;
@@ -598,11 +567,12 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 									break;
 								default: break;
 							}
-							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
+//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
 							m_ThreadStats.redirected_urls++;
 						} else {
-							std::string empty_str;
-							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
 							m_ThreadStats.sended_rst++;
 						}
 						flow_info->block=true;
@@ -618,11 +588,83 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	return false;
 }
 
+/*
+ * Put one packet in acl_search struct according to the packet ol_flags
+ */
+static inline void prepare_one_packet(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int index)
+{
+	struct rte_mbuf* pkt = pkts_in[index];
+
+	uint32_t l3_ptypes = pkt->packet_type & RTE_PTYPE_L3_MASK;
+
+	// XXX we cannot filter non IP packet yet
+	if (l3_ptypes == RTE_PTYPE_L3_IPV4)
+	{
+		/* Fill acl structure */
+		acl->data_ipv4[acl->num_ipv4] = ((struct packet_info *)pkt->userdata)->l3 + offsetof(struct ipv4_hdr, next_proto_id);
+		acl->m_ipv4[(acl->num_ipv4)++] = pkt;
+	} else if (l3_ptypes == RTE_PTYPE_L3_IPV6)
+	{
+		/* Fill acl structure */
+		acl->data_ipv6[acl->num_ipv6] = ((struct packet_info *)pkt->userdata)->l3 + offsetof(struct ipv4_hdr, next_proto_id);
+		acl->m_ipv6[(acl->num_ipv6)++] = pkt;
+	}
+}
+
+/*
+ * Loop through all packets and classify them if acl_search if possible.
+ */
+static inline void prepare_acl_parameter(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int nb_rx)
+{
+	int i = 0, j = 0;
+
+	acl->num_ipv4 = 0;
+	acl->num_ipv6 = 0;
+
+#define PREFETCH()                                          \
+	rte_prefetch0(rte_pktmbuf_mtod(pkts_in[i], void*)); \
+	i++;                                                \
+	j++;
+
+	// we prefetch0 packets 3 per 3
+	switch (nb_rx % PREFETCH_OFFSET) {
+		while (nb_rx != i) {
+		case 0:
+			PREFETCH();
+		case 2:
+			PREFETCH();
+		case 1:
+			PREFETCH();
+
+			while (j > 0) {
+				prepare_one_packet(pkts_in, acl, i - j);
+				--j;
+			}
+		}
+	}
+}
+
+
 
 
 bool WorkerThread::run(uint32_t coreId)
 {
 	setCoreId(coreId);
+	uint8_t portid = 0, queueid;
+	uint32_t lcore_id;
+	struct lcore_conf* qconf;
+	uint16_t nb_rx;
+	struct rte_mbuf *bufs[EXTFILTER_CAPTURE_BURST_SIZE];
+
+	lcore_id = rte_lcore_id();
+	qconf = extFilter::getLcoreConf(lcore_id);
+
+	if (qconf->n_rx_queue == 0)
+	{
+		_logger.information("Lcore %d has nothing to do", (int) lcore_id);
+		return true;
+	}
+
 //	m_CoreId = coreId;
 	m_Stop = false;
 	struct rte_mbuf *buf;
@@ -632,6 +674,7 @@ bool WorkerThread::run(uint32_t coreId)
 	const uint64_t gc_int_tsc = (extFilter::getTscHz() + US_PER_S - 1) / US_PER_S * EXTF_GC_INTERVAL;
 
 	int32_t n_flows=m_FlowHash->getHashSize();
+
 	int gc_budget = ((double)n_flows/(EXTF_ALL_GC_INTERVAL*1000*1000))*EXTF_GC_INTERVAL;
 
 	_logger.debug("gc_budget = %d",gc_budget);
@@ -642,27 +685,98 @@ bool WorkerThread::run(uint32_t coreId)
 	_logger.debug("Running gc clean every %" PRIu64 " cycles. Cycles per second %" PRIu64, gc_int_tsc, rte_get_timer_hz());
 
 	int32_t iter_flows = 0;
+
+	for (int i = 0; i < qconf->n_rx_queue; i++)
+	{
+		portid = qconf->rx_queue_list[i].port_id;
+//		stats[lcore_id].port_id = portid;
+		queueid = qconf->rx_queue_list[i].queue_id;
+		_logger.information("-- lcoreid=%d portid=%d rxqueueid=%d", (int)lcore_id, (int)portid, (int)queueid);
+	}
+
 	// main loop, runs until be told to stop
 	while (!m_Stop)
 	{
-		rte_distributor_request_pkt(_distr->getDistributor(), _worker_id, NULL);
-		while((buf = rte_distributor_poll_pkt(_distr->getDistributor(), _worker_id)) == NULL)
-		{
-			if(m_Stop)
-				break;
-			rte_pause();
-		}
-		if (unlikely(buf == NULL))
-			continue;
+		if(m_Stop)
+			break;
+
 		cur_tsc = rte_rdtsc();
 		last_time = cur_tsc;
 
-		rte_prefetch0(rte_pktmbuf_mtod(buf, void *));
+#ifdef ATOMIC_ACL
+#define SWAP_ACX(cur_acx, new_acx)                                            \
+	acx = cur_acx;                                                        \
+	if (!rte_atomic64_cmpswap((uintptr_t*)&new_acx, (uintptr_t*)&cur_acx, \
+				  (uintptr_t)new_acx)) {                      \
+		rte_acl_free(acx);                                            \
+	}
+#else
+#define SWAP_ACX(cur_acx, new_acx)          \
+	if (unlikely(cur_acx != new_acx)) { \
+		rte_acl_free(cur_acx);      \
+		cur_acx = new_acx;          \
+	}
+#endif
+		SWAP_ACX(qconf->cur_acx_ipv4, qconf->new_acx_ipv4);
+		SWAP_ACX(qconf->cur_acx_ipv6, qconf->new_acx_ipv6);
+#undef SWAP_ACX
 
-		// count received packets
-		m_ThreadStats.total_packets++;
-		analyzePacket(buf, last_time);
-		rte_pktmbuf_free(buf);
+		/*
+		 * Read packet from RX queues
+		 */
+		for (int i = 0; i < qconf->n_rx_queue; i++)
+		{
+			portid = qconf->rx_queue_list[i].port_id;
+			queueid = qconf->rx_queue_list[i].queue_id;
+			nb_rx = rte_eth_rx_burst(portid, queueid, bufs, EXTFILTER_CAPTURE_BURST_SIZE);
+			if (unlikely(nb_rx == 0))
+				continue;
+
+			m_ThreadStats.total_packets += nb_rx;
+			// prefetch packets...
+			for(uint16_t i = 0; i < PREFETCH_OFFSET && i < nb_rx; i++)
+			{
+				rte_prefetch0(rte_pktmbuf_mtod(bufs[i], void *));
+			}
+
+			struct ACL::acl_search_t acl_search;
+
+			prepare_acl_parameter(bufs, &acl_search, nb_rx);
+
+			if(likely(qconf->cur_acx_ipv4 && acl_search.num_ipv4))
+			{
+				rte_acl_classify(qconf->cur_acx_ipv4, acl_search.data_ipv4, acl_search.res_ipv4, acl_search.num_ipv4, DEFAULT_MAX_CATEGORIES);
+				for(int acli=0; acli < acl_search.num_ipv4; acli++)
+				{
+					if(acl_search.res_ipv4[acli] != 0)
+					{
+						((struct packet_info *)acl_search.m_ipv4[acli]->userdata)->acl_res=acl_search.res_ipv4[acli];
+					}
+				}
+			}
+			if (likely(qconf->cur_acx_ipv6 && acl_search.num_ipv6))
+			{
+				rte_acl_classify(qconf->cur_acx_ipv6, acl_search.data_ipv6, acl_search.res_ipv6, acl_search.num_ipv6, DEFAULT_MAX_CATEGORIES);
+				for(int acli=0; acli < acl_search.num_ipv6; acli++)
+				{
+					if(acl_search.res_ipv6[acli] != 0)
+					{
+						((struct packet_info *)acl_search.m_ipv6[acli]->userdata)->acl_res=acl_search.res_ipv6[acli];
+					}
+				}
+			}
+
+			for(uint16_t i = 0; i < nb_rx; i++)
+			{
+				buf = bufs[i];
+				if(buf->userdata)
+				{
+					analyzePacket(buf);
+					rte_mempool_put(extFilter::getPktInfoPool(),buf->userdata); // free packet_info
+				}
+				rte_pktmbuf_free(buf);
+			}
+		}
 
 		diff_gc_tsc = cur_tsc - prev_gc_tsc;
 		if (unlikely(diff_gc_tsc >= gc_int_tsc))
@@ -672,32 +786,46 @@ bool WorkerThread::run(uint32_t coreId)
 			{
 				if(ipv4_flows[iter_flows] && ((ipv4_flows[iter_flows]->last_seen+timeout) < cur_tsc))
 				{
-					int32_t delr=rte_hash_del_key(m_FlowHash->getIPv4Hash(), &ipv4_flows[iter_flows]->keys.ipv4_key);
-					if(delr < 0)
+					void *key_ptr;
+					int fr=rte_hash_get_key_with_position(m_FlowHash->getIPv4Hash(),iter_flows, &key_ptr);
+					if(fr < 0)
 					{
-						_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
+						_logger.error("Key not found in the hash for the position %d", (int) iter_flows);
 					} else {
-						ipv4_flows[iter_flows]->free_mem();
-						rte_mempool_put(flows_pool,ipv4_flows[iter_flows]);
-						ipv4_flows[iter_flows] = nullptr;
-						m_ThreadStats.ndpi_flows_count--;
-						m_ThreadStats.ndpi_ipv4_flows_count--;
-						m_ThreadStats.ndpi_flows_deleted++;
+						int32_t delr=rte_hash_del_key(m_FlowHash->getIPv4Hash(), key_ptr);
+						if(delr < 0)
+						{
+							_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
+						} else {
+							ipv4_flows[iter_flows]->free_mem();
+							rte_mempool_put(flows_pool, ipv4_flows[iter_flows]);
+							ipv4_flows[iter_flows] = nullptr;
+							m_ThreadStats.ndpi_flows_count--;
+							m_ThreadStats.ndpi_ipv4_flows_count--;
+							m_ThreadStats.ndpi_flows_deleted++;
+						}
 					}
 				}
 				if(ipv6_flows[iter_flows] && ((ipv6_flows[iter_flows]->last_seen+timeout) < cur_tsc))
 				{
-					int32_t delr=rte_hash_del_key(m_FlowHash->getIPv6Hash(), &ipv6_flows[iter_flows]->keys.ipv6_key);
-					if(delr < 0)
+					void *key_ptr;
+					int fr=rte_hash_get_key_with_position(m_FlowHash->getIPv6Hash(),iter_flows, &key_ptr);
+					if(fr < 0)
 					{
-						_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
+						_logger.error("Key not found in the hash for the position %d", (int) iter_flows);
 					} else {
-						ipv6_flows[iter_flows]->free_mem();
-						rte_mempool_put(flows_pool,ipv6_flows[iter_flows]);
-						ipv6_flows[iter_flows] = nullptr;
-						m_ThreadStats.ndpi_flows_count--;
-						m_ThreadStats.ndpi_ipv6_flows_count--;
-						m_ThreadStats.ndpi_flows_deleted++;
+						int32_t delr=rte_hash_del_key(m_FlowHash->getIPv6Hash(), key_ptr);
+						if(delr < 0)
+						{
+							_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
+						} else {
+							ipv6_flows[iter_flows]->free_mem();
+							rte_mempool_put(flows_pool,ipv6_flows[iter_flows]);
+							ipv6_flows[iter_flows] = nullptr;
+							m_ThreadStats.ndpi_flows_count--;
+							m_ThreadStats.ndpi_ipv6_flows_count--;
+							m_ThreadStats.ndpi_flows_deleted++;
+						}
 					}
 				}
 				z++;
