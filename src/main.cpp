@@ -666,6 +666,11 @@ void extFilter::initialize(Application& self)
 		}
 	}
 	_lcore_params = _lcore_params_array; // xxx ???
+	if(!_nb_lcore_params)
+	{
+		logger().fatal("No cores defined in the configuration file");
+		throw Poco::Exception("Configuration error");
+	}
 
 	_flowhash_size_per_worker=rte_align32pow2(_flowhash_size/_nb_lcore_params);
 
