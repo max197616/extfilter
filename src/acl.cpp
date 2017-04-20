@@ -107,8 +107,17 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 				{
 					if(str[0] == '#' || str[0] == ';')
 						continue;
-					std::size_t found=str.find(":");
-					std::string ip=str.substr(0, found);
+					bool ipv6=false;
+					std::size_t found=str.find("]:");
+					int first_pos=0;
+					if(found != std::string::npos)
+					{
+						ipv6=true;
+						first_pos = 1;
+					} else {
+						found = str.find(":");
+					}
+					std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
 					std::size_t found_slash=ip.find("/");
 					uint32_t def_mask=0;
 					if(found_slash != std::string::npos)
@@ -122,7 +131,7 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 					uint16_t port_e=65535;
 					if(found != std::string::npos)
 					{
-						port=str.substr(found+1,str.length());
+						port=str.substr(ipv6 ? found+2 : found+1,str.length());
 						_logger.debug("IP is %s port %s",ip,port);
 						port_s=atoi(port.c_str());
 						port_e=port_s;
@@ -187,8 +196,17 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 				{
 					if(str[0] == '#' || str[0] == ';')
 						continue;
-					std::size_t found=str.find(":");
-					std::string ip=str.substr(0, found);
+					bool ipv6=false;
+					std::size_t found=str.find("]:");
+					int first_pos=0;
+					if(found != std::string::npos)
+					{
+						ipv6=true;
+						first_pos = 1;
+					} else {
+						found = str.find(":");
+					}
+					std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
 					std::size_t found_slash=ip.find("/");
 					uint32_t def_mask=0;
 					if(found_slash != std::string::npos)
@@ -202,7 +220,7 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 					uint16_t port_e=65535;
 					if(found != std::string::npos)
 					{
-						port=str.substr(found+1,str.length());
+						port=str.substr(ipv6 ? found+2 : found+1,str.length());
 						_logger.debug("IP is %s port %s",ip,port);
 						port_s=atoi(port.c_str());
 						port_e=port_s;
