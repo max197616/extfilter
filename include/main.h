@@ -164,7 +164,7 @@ private:
 	
 	static uint64_t _tsc_hz;
 	uint32_t _flowhash_size;
-	uint32_t _flowhash_size_per_worker[RTE_MAX_ETHPORTS];
+	uint32_t _flowhash_size_per_worker[RTE_MAX_LCORE];
 
 	int _num_of_senders;
 

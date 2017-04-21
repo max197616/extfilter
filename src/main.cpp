@@ -665,7 +665,8 @@ void extFilter::initialize(Application& self)
 			}
 		}
 		Poco::StringTokenizer restTokenizer(p, ";");
-		int nb_lcores_per_port;
+		std::vector<int> lcores;
+		int nb_lcores_per_port = 0;
 		for(auto itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
 		{
 			Poco::StringTokenizer params(*itr, ",");
@@ -676,6 +677,7 @@ void extFilter::initialize(Application& self)
 				logger().fatal("Exceeded max number of lcore params: %d", (int) _nb_lcore_params);
 				throw Poco::Exception("Configuration error");
 			}
+			lcores.push_back(lcore_id);
 			_lcore_params_array[_nb_lcore_params].port_id = i;
 			_lcore_params_array[_nb_lcore_params].port_type = port_type;
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
@@ -683,8 +685,12 @@ void extFilter::initialize(Application& self)
 			_nb_lcore_params++;
 			nb_lcores_per_port++;
 		}
-		_flowhash_size_per_worker[i] = rte_align32pow2(_flowhash_size/nb_lcores_per_port);
-		logger().information("Flow hash size per worker %d for port %d", (int)_flowhash_size_per_worker[i], (int)i);
+		uint32_t hash_size = rte_align32pow2(_flowhash_size/nb_lcores_per_port);
+		for(auto const &lcore_id : lcores)
+		{
+			_flowhash_size_per_worker[lcore_id] = hash_size;
+		}
+		logger().information("Flow hash size per worker %d for port %d", (int)hash_size, (int)i);
 	}
 	_lcore_params = _lcore_params_array;
 	if(!_nb_lcore_params)
@@ -900,9 +906,9 @@ int extFilter::main(const ArgVec& args)
 					logger().debug("Loading nDPI protocols from file %s", _protocolsFile);
 					ndpi_load_protocols_file(workerConfigArr[lcore_id].ndpi_struct, (char *)_protocolsFile.c_str());
 				}
-				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker[qconf->portid]);
+				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker[lcore_id]);
 
-				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker[qconf->portid]);
+				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker[lcore_id]);
 
 				std::string workerName("WorkerThread-" + std::to_string(lcore_id));
 				logger().debug("Preparing thread '%s'", workerName);
