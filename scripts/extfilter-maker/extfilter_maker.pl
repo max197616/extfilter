@@ -164,7 +164,12 @@ while (my $ips = $sth->fetchrow_hashref())
 			my @url_ips=get_ips_for_record_id($ips->{record_id});
 			foreach my $ip (@url_ips)
 			{
-				print $HOSTS_FILE "$ip:",$ipp[2],"\n";
+				if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+				{
+					print $HOSTS_FILE "$ip:",$ipp[2],"\n";
+				} else {
+					print $HOSTS_FILE "[$ip]:",$ipp[2],"\n";
+				}
 			}
 		}
 		next;
@@ -201,7 +206,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		if($host =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
 		{
 			#print "Host name is an ip address, add to ip:port file\n";
-			print $HOSTS_FILE "$host:",$port,"\n";
+			print $HOSTS_FILE "$host:", $port ,"\n";
 		}
 		if($port ne "443")
 		{
@@ -213,7 +218,12 @@ while (my $ips = $sth->fetchrow_hashref())
 		{
 			next if(defined $ssl_ip{$ip});
 			$ssl_ip{$ip}=1;
-			print $SSL_IPS_FILE "$ip","\n";
+			if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+			{
+				print $SSL_IPS_FILE "$ip","\n";
+			} else {
+				print $SSL_IPS_FILE "[$ip]","\n";
+			}
 		}
 		next;
 	}
