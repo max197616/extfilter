@@ -665,6 +665,7 @@ void extFilter::initialize(Application& self)
 			}
 		}
 		Poco::StringTokenizer restTokenizer(p, ";");
+		int nb_lcores_per_port;
 		for(auto itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
 		{
 			Poco::StringTokenizer params(*itr, ",");
@@ -680,18 +681,20 @@ void extFilter::initialize(Application& self)
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
 			_lcore_params_array[_nb_lcore_params].lcore_id = lcore_id;
 			_nb_lcore_params++;
+			nb_lcores_per_port++;
 		}
+		_flowhash_size_per_worker[i] = rte_align32pow2(_flowhash_size/nb_lcores_per_port);
+		logger().information("Flow hash size per worker %d for port %d", (int)_flowhash_size_per_worker[i], (int)i);
 	}
-	_lcore_params = _lcore_params_array; // xxx ???
+	_lcore_params = _lcore_params_array;
 	if(!_nb_lcore_params)
 	{
 		logger().fatal("No cores defined in the configuration file");
 		throw Poco::Exception("Configuration error");
 	}
 
-	_flowhash_size_per_worker=rte_align32pow2(_flowhash_size/_nb_lcore_params);
+//	_flowhash_size_per_worker=rte_align32pow2((_flowhash_size/_nb_lcore_params) * n_ports);
 
-	logger().information("Flow hash size per worker %d", (int)_flowhash_size_per_worker);
 
 	_nb_ports = rte_eth_dev_count();
 	if(_nb_ports == 0)
@@ -897,10 +900,9 @@ int extFilter::main(const ArgVec& args)
 					logger().debug("Loading nDPI protocols from file %s", _protocolsFile);
 					ndpi_load_protocols_file(workerConfigArr[lcore_id].ndpi_struct, (char *)_protocolsFile.c_str());
 				}
-				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker);
+				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker[qconf->portid]);
 
-				// make worker
-				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker); // update socket id
+				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker[qconf->portid]);
 
 				std::string workerName("WorkerThread-" + std::to_string(lcore_id));
 				logger().debug("Preparing thread '%s'", workerName);
