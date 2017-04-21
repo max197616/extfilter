@@ -4,6 +4,8 @@
 #include <rte_config.h>
 #include <rte_acl.h>
 #include <rte_ip.h>
+#include <map>
+#include <string>
 #include "worker.h"
 #include "main.h"
 
@@ -17,7 +19,7 @@ class ACL
 public:
 	ACL();
 	~ACL();
-	int initACL(std::string &fn, std::string &ssl_ip_file, int _numa_on);
+	int initACL(std::map<std::string, int> &fns, int _numa_on);
 
 	static struct rte_acl_ctx* ipv4_acx[NB_SOCKETS];
 	static struct rte_acl_ctx* ipv6_acx[NB_SOCKETS];

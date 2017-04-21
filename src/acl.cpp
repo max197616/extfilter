@@ -74,7 +74,22 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 	return context;
 }
 
-int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on)
+static void _parse_ipv6(uint32_t *v, struct rte_acl_field field[4], uint32_t mask)
+{
+	const uint32_t nbu32 = sizeof(uint32_t) * CHAR_BIT;
+	/* put all together. */
+	for (int i = 0; i < 4; i++)
+	{
+		if (mask >= (i + 1) * nbu32)
+			field[i].mask_range.u32 = nbu32;
+		else
+			field[i].mask_range.u32 =  mask > (i * nbu32) ? mask - (i * 32) : 0;
+		field[i].value.u32 = v[i];
+	}
+
+}
+
+int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 {
 	char mapped[NB_SOCKETS];
 
@@ -85,6 +100,8 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 
 	unsigned int total_num = 0;
 	unsigned int total_num_ipv6 = 0;
+	
+	uint32_t def_ipv6[4] = { 0, 0, 0, 0 };
 
 //	unsigned int acl_cnt = 0;
 
@@ -92,169 +109,111 @@ int ACL::initACL(std::string &hosts_file, std::string &ssl_ip_file, int _numa_on
 	std::vector<struct ACL::acl4_rule> acl4_rules;
 	std::vector<struct ACL::acl6_rule> acl6_rules;
 
-	if(!hosts_file.empty())
+	for(auto const &entry: fns)
 	{
-		_logger.debug("Building ACL from file %s", hosts_file);
-		Poco::FileInputStream hf(hosts_file);
-		if(hf.good())
+		std::string file_name=entry.first;
+		if(!file_name.empty())
 		{
-			int lineno=1;
-			while(!hf.eof())
+			_logger.debug("Building ACL from file %s", file_name);
+			Poco::FileInputStream hf(file_name);
+			if(hf.good())
 			{
-				std::string str;
-				getline(hf,str);
-				if(!str.empty())
+				int lineno=1;
+				while(!hf.eof())
 				{
-					if(str[0] == '#' || str[0] == ';')
-						continue;
-					bool ipv6=false;
-					std::size_t found=str.find("]:");
-					int first_pos=0;
-					if(found != std::string::npos)
+					std::string str;
+					getline(hf,str);
+					if(!str.empty())
 					{
-						ipv6=true;
-						first_pos = 1;
-					} else {
-						found = str.find(":");
-					}
-					std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
-					std::size_t found_slash=ip.find("/");
-					uint32_t def_mask=0;
-					if(found_slash != std::string::npos)
-					{
-						std::string mask_str=ip.substr(found_slash+1,ip.length());
-						def_mask = atoi(mask_str.c_str());
-						ip = ip.substr(0, found_slash);
-					}
-					std::string port;
-					uint16_t port_s=0;
-					uint16_t port_e=65535;
-					if(found != std::string::npos)
-					{
-						port=str.substr(ipv6 ? found+2 : found+1,str.length());
-						_logger.debug("IP is %s port %s",ip,port);
-						port_s=atoi(port.c_str());
-						port_e=port_s;
-					} else {
-						_logger.debug("IP %s without port", ip);
-					}
-					Poco::Net::IPAddress ip_addr(ip);
-					if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
-					{
-						struct ACL::acl4_rule rule;
-						rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
-						rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
-						rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
-						rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
-						rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
-						rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
-						rule.field[ACL::SRCP_FIELD_IPV4].value.u16 = 0;
-						rule.field[ACL::SRCP_FIELD_IPV4].mask_range.u16 = 65535;
-						rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
-						rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
+						if(str[0] == '#' || str[0] == ';')
+							continue;
+						bool ipv6=false;
+						if(str[0] == '[')
+							ipv6 = true;
+						std::size_t found;
+						int first_pos=0;
+						if(ipv6)
+						{
+							found = str.find("]");
+							ipv6=true;
+							first_pos = 1;
+						} else {
+							found = str.find(":");
+						}
+						std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
+						std::size_t found_slash=ip.find("/");
+						uint32_t def_mask=0;
+						if(found_slash != std::string::npos)
+						{
+							std::string mask_str=ip.substr(found_slash+1,ip.length());
+							def_mask = atoi(mask_str.c_str());
+							ip = ip.substr(0, found_slash);
+						}
+						std::string port;
+						uint16_t port_s=0;
+						uint16_t port_e=65535;
+						if(ipv6)
+						{
+							found = str.find(":", found+1);
+						}
+						if(found != std::string::npos)
+						{
+							port=str.substr(ipv6 ? found+2 : found+1,str.length());
+							_logger.debug("IP is %s port %s", ip, port);
+							port_s=atoi(port.c_str());
+							port_e=port_s;
+						} else {
+							_logger.debug("IP %s without port", ip);
+						}
+						Poco::Net::IPAddress ip_addr(ip);
+						if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
+						{
+							struct ACL::acl4_rule rule;
+							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
+							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
+							rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
+							rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
+							rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
+							rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
+							rule.field[ACL::SRCP_FIELD_IPV4].value.u16 = 0;
+							rule.field[ACL::SRCP_FIELD_IPV4].mask_range.u16 = 65535;
+							rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
+							rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
+	
+							rule.data.userdata = entry.second;
+							rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
+							rule.data.category_mask = 1;
 
-						rule.data.userdata = ACL::ACL_DROP;
-						rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
-						rule.data.category_mask = 1;
+							acl4_rules.push_back(rule);
+							total_num++;
+						} else if (ip_addr.family() == Poco::Net::IPAddress::IPv6)
+						{
+							struct ACL::acl6_rule rule;
+							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = IPPROTO_TCP;
+							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = 0xff;
+							_parse_ipv6((uint32_t *)&def_ipv6, rule.field + SRC1_FIELD_IPV6, 0);
+							_parse_ipv6((uint32_t *)ip_addr.addr(), rule.field + DST1_FIELD_IPV6, def_mask ? def_mask : 128);
 
-						acl4_rules.push_back(rule);
-						total_num++;
-					} else if (ip_addr.family() == Poco::Net::IPAddress::IPv6)
-					{
-						struct ACL::acl6_rule rule;
-						rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = IPPROTO_TCP;
-						rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = 0xff;
-						
+							rule.field[ACL::SRCP_FIELD_IPV6].value.u16 = 0;
+							rule.field[ACL::SRCP_FIELD_IPV6].mask_range.u16 = 65535;
+							rule.field[ACL::DSTP_FIELD_IPV6].value.u16 = port_s;
+							rule.field[ACL::DSTP_FIELD_IPV6].mask_range.u16 = port_e;
 
-						rule.data.userdata = ACL::ACL_DROP;
-						rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
-						rule.data.category_mask = -1;
+							rule.data.userdata = entry.second;
+							rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
+							rule.data.category_mask = 1;
 
-						acl6_rules.push_back(rule);
-						total_num_ipv6++;
+							acl6_rules.push_back(rule);
+							total_num_ipv6++;
+						}
 					}
+					lineno++;
 				}
-				lineno++;
-			}
-		} else
-			throw Poco::OpenFileException(hosts_file);
-		hf.close();
+			} else
+				throw Poco::OpenFileException(file_name);
+			hf.close();
+		}
 	}
-
-	if(!ssl_ip_file.empty())
-	{
-		_logger.debug("Building ACL from file %s", ssl_ip_file);
-		Poco::FileInputStream sf(ssl_ip_file);
-		if(sf.good())
-		{
-			int lineno=1;
-			while(!sf.eof())
-			{
-				std::string str;
-				getline(sf,str);
-				if(!str.empty())
-				{
-					if(str[0] == '#' || str[0] == ';')
-						continue;
-					bool ipv6=false;
-					std::size_t found=str.find("]:");
-					int first_pos=0;
-					if(found != std::string::npos)
-					{
-						ipv6=true;
-						first_pos = 1;
-					} else {
-						found = str.find(":");
-					}
-					std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
-					std::size_t found_slash=ip.find("/");
-					uint32_t def_mask=0;
-					if(found_slash != std::string::npos)
-					{
-						std::string mask_str=ip.substr(found_slash+1,ip.length());
-						def_mask = atoi(mask_str.c_str());
-						ip = ip.substr(0, found_slash);
-					}
-					std::string port;
-					uint16_t port_s=0;
-					uint16_t port_e=65535;
-					if(found != std::string::npos)
-					{
-						port=str.substr(ipv6 ? found+2 : found+1,str.length());
-						_logger.debug("IP is %s port %s",ip,port);
-						port_s=atoi(port.c_str());
-						port_e=port_s;
-					} else {
-						_logger.debug("IP %s without port", ip);
-					}
-					Poco::Net::IPAddress ip_addr(ip);
-					if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
-					{
-						struct ACL::acl4_rule rule;
-						rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
-						rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
-						rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
-						rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
-						rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
-						rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
-						rule.field[ACL::SRCP_FIELD_IPV4].value.u16 = 0;
-						rule.field[ACL::SRCP_FIELD_IPV4].mask_range.u16 = 65535;
-						rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
-						rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
-						rule.data.userdata = ACL::ACL_SSL;
-						rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
-						rule.data.category_mask = -1;
-						acl4_rules.push_back(rule);
-						total_num++;
-					}
-				}
-				lineno++;
-			}
-		} else
-			throw Poco::OpenFileException(ssl_ip_file);
-		sf.close();
-	}
-
 	if(!acl4_rules.empty())
 	{
 		_logger.information("Preparing %d rules for IPv4 ACL", (int) acl4_rules.size());

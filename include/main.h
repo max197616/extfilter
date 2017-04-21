@@ -21,12 +21,14 @@ class ACL;
 
 struct lcore_params {
 	uint8_t port_id;
+	uint8_t port_type;
 	uint8_t queue_id;
 	uint8_t lcore_id;
 } __rte_cache_aligned;
 
 struct lcore_rx_queue {
 	uint8_t port_id;
+	uint8_t port_type;
 	uint8_t queue_id;
 } __rte_cache_aligned;
 

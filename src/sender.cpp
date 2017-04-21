@@ -154,7 +154,7 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		tcph->ack_seq = seqnum;
 		tcph->ack = 1;
 		tcph->fin = 1;
-		tcph->window = htons(5840);
+		tcph->window = htons(5850);
 	}
 	tcph->urg = 0;
 	tcph->check = 0;

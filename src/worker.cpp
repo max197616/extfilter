@@ -650,7 +650,7 @@ static inline void prepare_acl_parameter(struct rte_mbuf** pkts_in, struct ACL::
 bool WorkerThread::run(uint32_t coreId)
 {
 	setCoreId(coreId);
-	uint8_t portid = 0, queueid;
+	uint8_t portid = 0, queueid, port_type;
 	uint32_t lcore_id;
 	struct lcore_conf* qconf;
 	uint16_t nb_rx;
@@ -727,6 +727,7 @@ bool WorkerThread::run(uint32_t coreId)
 		for (int i = 0; i < qconf->n_rx_queue; i++)
 		{
 			portid = qconf->rx_queue_list[i].port_id;
+			port_type = qconf->rx_queue_list[i].port_type;
 			queueid = qconf->rx_queue_list[i].queue_id;
 			nb_rx = rte_eth_rx_burst(portid, queueid, bufs, EXTFILTER_CAPTURE_BURST_SIZE);
 			if (unlikely(nb_rx == 0))
@@ -769,10 +770,10 @@ bool WorkerThread::run(uint32_t coreId)
 			for(uint16_t i = 0; i < nb_rx; i++)
 			{
 				buf = bufs[i];
-				if(buf->userdata)
+				if(likely(buf->userdata && port_type == P_TYPE_SUBSCRIBER))
 				{
 					analyzePacket(buf);
-					rte_mempool_put(extFilter::getPktInfoPool(),buf->userdata); // free packet_info
+					rte_mempool_put(extFilter::getPktInfoPool(), buf->userdata); // free packet_info
 				}
 				rte_pktmbuf_free(buf);
 			}

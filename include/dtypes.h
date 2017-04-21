@@ -12,6 +12,12 @@ enum entry_types
 	E_TYPE_URL
 };
 
+enum port_types
+{
+	P_TYPE_SUBSCRIBER,
+	P_TYPE_NETWORK
+};
+
 struct entry_data
 {
 	uint32_t lineno;

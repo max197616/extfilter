@@ -316,9 +316,9 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 
 	if (!link.link_status)
 	{
-		logger().warning("Link down on port %d", port);
-		return 0;
+		logger().warning("Link down on port %d", (int) port);
 	}
+
 
 	rte_eth_macaddr_get(port, addr);
 	char buffer[100];
@@ -327,6 +327,7 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 	logger().information("Port %d MAC: %s", (int)port, mac_addr);
 
 	rte_eth_promiscuous_enable(port);
+
 
 	return 0;
 }
@@ -371,6 +372,7 @@ int extFilter::_init_lcore_rx_queues(void)
 		} else {
 			_lcore_conf[lcore].rx_queue_list[nb_rx_queue].port_id = _lcore_params[i].port_id;
 			_lcore_conf[lcore].rx_queue_list[nb_rx_queue].queue_id = _lcore_params[i].queue_id;
+			_lcore_conf[lcore].rx_queue_list[nb_rx_queue].port_type = _lcore_params[i].port_type;
 			_lcore_conf[lcore].n_rx_queue++;
 		}
 	}
@@ -648,6 +650,20 @@ void extFilter::initialize(Application& self)
 			throw Poco::Exception("Congfiguration error");
 		}
 		_enabled_port_mask |= (1 << i);
+		std::string type = config().getString(key+".type", "");
+		uint8_t port_type = P_TYPE_SUBSCRIBER;
+		if(!type.empty())
+		{
+			if(type == "network")
+			{
+				port_type = P_TYPE_NETWORK;
+			} else if (type == "subscriber")
+			{
+			} else {
+				logger().fatal("Unknown port type %s", type);
+				throw Poco::Exception("Congfiguration error");
+			}
+		}
 		Poco::StringTokenizer restTokenizer(p, ";");
 		for(auto itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
 		{
@@ -660,6 +676,7 @@ void extFilter::initialize(Application& self)
 				throw Poco::Exception("Configuration error");
 			}
 			_lcore_params_array[_nb_lcore_params].port_id = i;
+			_lcore_params_array[_nb_lcore_params].port_type = port_type;
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
 			_lcore_params_array[_nb_lcore_params].lcore_id = lcore_id;
 			_nb_lcore_params++;
@@ -698,13 +715,13 @@ void extFilter::initialize(Application& self)
 	// init acl
 
 	_acl = new ACL();
+	std::map<std::string,int> fns;
 	if(!_hostsFile.empty())
-	{
-		if(_acl->initACL(_hostsFile, _sslIpsFile, _numa_on))
-		{
-			throw Poco::Exception("Configuration error");
-		}
-	}
+		fns[_hostsFile] = ACL::ACL_DROP;
+	if(!_sslIpsFile.empty())
+		fns[_sslIpsFile] = ACL::ACL_SSL;
+	if(_acl->initACL(fns, _numa_on))
+		throw Poco::Exception("Configuration error");
 
 	// init value...
 	_tsc_hz = rte_get_tsc_hz();
