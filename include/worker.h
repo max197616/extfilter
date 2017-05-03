@@ -32,6 +32,8 @@
 /* Configure how many packets ahead to prefetch, when reading packets */
 #define PREFETCH_OFFSET 3
 
+class NotifyManager;
+
 struct WorkerConfig
 {
 	uint32_t CoreId;
@@ -56,6 +58,9 @@ struct WorkerConfig
 	bool url_normalization;
 	bool remove_dot;
 
+	bool notify_enabled;
+	NotifyManager *nm;
+
 	WorkerConfig()
 	{
 		CoreId = RTE_MAX_LCORE+1;
@@ -70,6 +75,8 @@ struct WorkerConfig
 		ndpi_struct = NULL;
 		url_normalization = true;
 		remove_dot = true;
+		notify_enabled = false;
+		nm = nullptr;
 	}
 };
 
@@ -95,6 +102,7 @@ private:
 
 	bool analyzePacket(struct rte_mbuf* mBuf);
 	bool analyzePacketFlow(struct rte_mbuf *m, uint64_t timestamp);
+	std::string _name;
 public:
 	WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, int socketid);
 
@@ -121,6 +129,16 @@ public:
 	inline uint64_t getLastTime()
 	{
 		return last_time;
+	}
+
+	inline std::string &getThreadName()
+	{
+		return _name;
+	}
+
+	inline void clearStats()
+	{
+		m_ThreadStats.clear();
 	}
 
 	ndpi_flow_info *getFlow(uint8_t *ip_header, int ip_version, uint64_t timestamp, int32_t *idx, uint32_t sig);

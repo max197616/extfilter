@@ -23,6 +23,7 @@
 #include "flow.h"
 #include "acl.h"
 #include <rte_hash.h>
+#include "notification.h"
 
 #define tcphdr(x)	((struct tcphdr *)(x))
 
@@ -31,7 +32,8 @@
 WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, int socketid) :
 		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
-		 m_FlowHash(fh)
+		m_FlowHash(fh),
+		_name(name)
 {
 	ipv4_flows = (struct ndpi_flow_info **)rte_zmalloc_socket("IPv4Flows", fh->getHashSize()*sizeof(struct ndpi_flow_info *), RTE_CACHE_LINE_SIZE, socketid);
 	if(ipv4_flows == nullptr)
@@ -310,7 +312,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 		dst_ip.reset(new Poco::Net::IPAddress(&ipv6_header->dst_addr,sizeof(in6_addr)));
 	}
 #endif
-	if(pkt_info->acl_res == ACL::ACL_DROP)
+	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
+	if(acl_action == ACL::ACL_DROP)
 	{
 		m_ThreadStats.matched_ip_port++;
 #ifdef _DEBUG_WORKER
@@ -434,7 +437,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 				}
 			} else if(m_WorkerConfig.block_undetected_ssl)
 			{
-				if(pkt_info->acl_res == ACL::ACL_SSL)
+				if(acl_action == ACL::ACL_SSL)
 				{
 					m_ThreadStats.matched_ssl_ip++;
 #ifdef _DEBUG_WORKER
@@ -582,6 +585,16 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 				}
 
 
+			}
+		}
+		if(ip_version == 4 && m_WorkerConfig.nm && m_WorkerConfig.notify_enabled && acl_action == ACL::ACL_NOTIFY)
+		{
+			uint32_t notify_group = (pkt_info->acl_res & ACL_NOTIFY_GROUP) >> 4;
+			if(m_WorkerConfig.nm->needNotify(ipv4_header->src_addr, notify_group))
+			{
+				std::string add_param("url="+uri);
+				NotifyManager::queue.enqueueNotification(new NotifyRedirect(notify_group, tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, (char *)add_param.c_str()));
+				return true;
 			}
 		}
 	}

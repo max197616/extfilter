@@ -6,6 +6,8 @@
 #include <rte_memory.h>
 #include "dtypes.h"
 #include "sender.h"
+#include "worker.h"
+#include "notification.h"
 
 #define DEFAULT_MBUF_POOL_SIZE 8191
 #define MAX_RX_QUEUE_PER_LCORE 16
@@ -101,6 +103,11 @@ public:
 		return _sslIpsFile;
 	}
 
+	std::string &getNotifyFile()
+	{
+		return _notify_acl_file;
+	}
+
 	static inline uint64_t getTscHz()
 	{
 		return _tsc_hz;
@@ -124,6 +131,45 @@ public:
 	inline int getNuma()
 	{
 		return _numa_on;
+	}
+
+	inline std::vector<DpdkWorkerThread*> &getThreadsVec()
+	{
+		return _workerThreadVec;
+	}
+
+	static inline extFilter *instance()
+	{
+		return _instance;
+	}
+
+	bool loadACL(void);
+
+	inline bool getNotifyEnabled()
+	{
+		return _notify_enabled;
+	}
+
+	inline bool setNotifyEnabled(bool ne)
+	{
+		_notify_enabled = ne;
+		if(ne)
+		{
+			for(auto const &thread : _workerThreadVec)
+			{
+				WorkerThread *w = (WorkerThread *)thread;
+				WorkerConfig &c = w->getConfig();
+				c.notify_enabled = true;
+			}
+		} else {
+			for(auto const &thread : _workerThreadVec)
+			{
+				WorkerThread *w = (WorkerThread *)thread;
+				WorkerConfig &c = w->getConfig();
+				c.notify_enabled = false;
+			}
+		}
+		return ne;
 	}
 
 	static rte_mempool *packet_info_pool[NB_SOCKETS];
@@ -182,6 +228,15 @@ private:
 	unsigned _nb_ports;
 
 	ACL *_acl;
+
+	bool _notify_enabled;
+	std::map<int, struct NotificationParams> _notify_groups;
+	std::vector<DpdkWorkerThread*> _workerThreadVec;
+
+	static extFilter *_instance;
+	std::string _notify_acl_file;
+	int _cmdline_port;
+	Poco::Net::IPAddress _cmdline_ip;
 };
 
 

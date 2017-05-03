@@ -49,12 +49,7 @@ void ReloadTask::runTask()
 		if(_event.tryWait(300))
 		{
 			_logger.information("Reloading data from files...");
-			std::map<std::string,int> fns;
-			if(!_parent->getHostsFile().empty())
-				fns[_parent->getHostsFile()] = ACL::ACL_DROP;
-			if(!_parent->getSSLIpsFile().empty())
-				fns[_parent->getSSLIpsFile()] = ACL::ACL_SSL;
-			if(_parent->getACL()->initACL(fns, _parent->extFilter::getNuma()) != 0)
+			if(_parent->loadACL())
 			{
 				_logger.error("Unable to reload ACLs");
 			} else {

@@ -12,6 +12,8 @@
 #define MAX_ACL_RULE_NUM 100000
 #define DEFAULT_MAX_CATEGORIES 1
 
+#define ACL_POLICY_MASK 0xf
+#define ACL_NOTIFY_GROUP 0xf0
 
 class ACL
 {
@@ -40,6 +42,7 @@ enum {
 	ACL_DEFAULT_POLICY = 0,
 	ACL_DROP,
 	ACL_SSL,
+	ACL_NOTIFY,
 	ACL_MAX_ACTIONS
 };
 

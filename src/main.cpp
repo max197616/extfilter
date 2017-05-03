@@ -25,6 +25,8 @@
 #include "statistictask.h"
 #include "reloadtask.h"
 #include "acl.h"
+#include "cmdlinetask.h"
+#include "notification.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -40,6 +42,8 @@
 #define DPDK_CONFIG_MQ_MODE		ETH_MQ_RX_RSS
 
 uint64_t extFilter::_tsc_hz;
+
+extFilter *extFilter::_instance = NULL;
 
 struct rte_mempool *extFilter::packet_info_pool[NB_SOCKETS];
 struct ether_addr extFilter::ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -59,6 +63,7 @@ extFilter::extFilter(): _helpRequested(false),
 	{
 		memset(&_lcore_conf[i],sizeof(lcore_conf),0);
 	}
+	_instance = this;
 //	Poco::ErrorHandler::set(&_errorHandler);
 }
 
@@ -572,7 +577,17 @@ void extFilter::initialize(Application& self)
 	_add_p_type=it->second;
 	logger().debug("URL additional info set to %s", add_p_type);
 
+	_notify_enabled = config().getBool("notify_enabled", false);
+	_notify_acl_file = config().getString("notify_acl_file","");
+
 	_protocolsFile=config().getString("protocols","");
+
+
+	_cmdline_port = config().getInt("cli_port", 0);
+	std::string cli_address = config().getString("cli_address", "");
+	if(!cli_address.empty() && _cmdline_port)
+		_cmdline_ip.parse(cli_address);
+
 
 	int coreMaskToUse=config().getInt("core_mask", 0);
 
@@ -622,7 +637,7 @@ void extFilter::initialize(Application& self)
 
 	delete [] initDpdkArgv;
 
-	uint32_t n_ports=0;
+	uint32_t n_ports = 0;
 	std::vector<std::string> keys;
 	config().keys(keys);
 	for(auto i=keys.begin(); i != keys.end(); i++)
@@ -632,6 +647,25 @@ void extFilter::initialize(Application& self)
 		std::size_t pos = key.find("port ");
 		if(pos != std::string::npos)
 			n_ports++;
+		pos = key.find("notify ");
+		if(pos != std::string::npos)
+		{
+			std::string group_num = key.substr(pos+7, key.length());
+			int group_id = Poco::NumberParser::parse(group_num);
+			if(group_id > 15)
+			{
+				logger().fatal("Too big number of notify group, maximum 15");
+				throw Poco::Exception("Too big number of notify group");
+			}
+			struct NotificationParams p;
+			p.period = config().getInt(key+".period", 3600);
+			p.group_id = group_id;
+			p.prm.code = config().getString(key+".http_code","");
+			p.prm.redirect_url = config().getString(key+".redirect_url","");
+			p.prm.send_rst_to_server = config().getBool(key+".rst_to_server", false);
+			p.prm.mtu = config().getInt(key+".out_mtu", 1500);
+			_notify_groups.insert(std::make_pair(group_id, p));
+		}
 	}
 	if(n_ports >= RTE_MAX_ETHPORTS)
 	{
@@ -724,13 +758,9 @@ void extFilter::initialize(Application& self)
 	// init acl
 
 	_acl = new ACL();
-	std::map<std::string,int> fns;
-	if(!_hostsFile.empty())
-		fns[_hostsFile] = ACL::ACL_DROP;
-	if(!_sslIpsFile.empty())
-		fns[_sslIpsFile] = ACL::ACL_SSL;
-	if(_acl->initACL(fns, _numa_on))
-		throw Poco::Exception("Configuration error");
+	
+	if(loadACL())
+		throw Poco::Exception("Can't init ACL");
 
 	// init value...
 	_tsc_hz = rte_get_tsc_hz();
@@ -861,12 +891,14 @@ int extFilter::main(const ArgVec& args)
 			ports.push_back(portid);
 		}
 
-		std::vector<DpdkWorkerThread*> workerThreadVec;
 		WorkerConfig workerConfigArr[RTE_MAX_LCORE];
 
 		Poco::TaskManager tm;
 		for(int i=1; i <= _num_of_senders; i++)
 			tm.start(new SenderTask(_sender_params,i));
+
+		NotifyManager *nm = new NotifyManager(20000, _notify_groups);
+		tm.start(nm);
 
 		/* launch per-lcore init on every lcore */
 		RTE_LCORE_FOREACH(lcore_id)
@@ -895,6 +927,8 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].url_normalization = _url_normalization;
 				workerConfigArr[lcore_id].remove_dot = _remove_dot;
 				workerConfigArr[lcore_id].add_p_type = _add_p_type;
+				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
+				workerConfigArr[lcore_id].nm = nm;
 				workerConfigArr[lcore_id].ndpi_struct = init_ndpi();
 				if (!workerConfigArr[lcore_id].ndpi_struct)
 				{
@@ -920,18 +954,25 @@ int extFilter::main(const ArgVec& args)
 					logger().fatal("Unable to launch thread on core %d, error: %d", lcore_id, err);
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
-				workerThreadVec.push_back(newWorker);
+				_workerThreadVec.push_back(newWorker);
 				pthread_setname_np(lcore_config[lcore_id].thread_id, workerName.c_str());
 			}
 		}
 
+		for(const auto &port_id : ports)
+		{
+			rte_eth_stats_reset(port_id);
+		}
 
-
-		tm.start(new StatisticTask(_statistic_interval, workerThreadVec, _statisticsFile, ports));
-		tm.start(new ReloadTask(this, workerThreadVec));
+		tm.start(new StatisticTask(_statistic_interval, _workerThreadVec, _statisticsFile, ports));
+		tm.start(new ReloadTask(this, _workerThreadVec));
+		if(_cmdline_port)
+		{
+			tm.start(new CmdLineTask(_cmdline_port, _cmdline_ip));
+		}
 		waitForTerminationRequest();
 
-		for (auto iter = workerThreadVec.begin(); iter != workerThreadVec.end(); iter++)
+		for (auto iter = _workerThreadVec.begin(); iter != _workerThreadVec.end(); iter++)
 		{
 			(*iter)->stop();
 			rte_eal_wait_lcore((*iter)->getCoreId());
@@ -1155,6 +1196,23 @@ void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm,DomainsMatc
 		throw Poco::OpenFileException(fn);
 	df.close();
 	logger().debug("Finish loading domains");
+}
+
+bool extFilter::loadACL(void)
+{
+	std::map<std::string,int> fns;
+	if(!_hostsFile.empty())
+		fns[_hostsFile] = ACL::ACL_DROP;
+	if(!_sslIpsFile.empty())
+		fns[_sslIpsFile] = ACL::ACL_SSL;
+	if(_notify_enabled && !_notify_acl_file.empty())
+		fns[_notify_acl_file] = ACL::ACL_NOTIFY;
+	if(_acl->initACL(fns, _numa_on))
+	{
+		logger().error("Unable to init ACL");
+		return true;
+	}
+	return false;
 }
 
 POCO_SERVER_MAIN(extFilter)

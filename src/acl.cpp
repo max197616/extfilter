@@ -127,7 +127,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 					{
 						if(str[0] == '#' || str[0] == ';')
 							continue;
-						bool ipv6=false;
+						int group_id = 0;
+						bool ipv6 = false;
 						if(str[0] == '[')
 							ipv6 = true;
 						std::size_t found;
@@ -156,9 +157,20 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 						{
 							found = str.find(":", found+1);
 						}
+						std::size_t end_pos = str.length();
+						if(entry.second == ACL::ACL_NOTIFY)
+						{
+							std::size_t f = str.find("@");
+							if(f != std::string::npos)
+							{
+								end_pos = f;
+								std::string group_num = str.substr(f+1, str.length());
+								group_id = atoi(group_num.c_str());
+							}
+						}
 						if(found != std::string::npos)
 						{
-							port=str.substr(ipv6 ? found+2 : found+1,str.length());
+							port=str.substr(ipv6 ? found+2 : found+1, end_pos);
 							_logger.debug("IP is %s port %s", ip, port);
 							port_s=atoi(port.c_str());
 							port_e=port_s;
@@ -171,16 +183,36 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 							struct ACL::acl4_rule rule;
 							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
 							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
-							rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
-							rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
-							rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
-							rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
+							if(entry.second == ACL::ACL_NOTIFY)
+							{
+								rule.field[ACL::DST_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
+								rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = 0;
+								rule.field[ACL::SRC_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
+								rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
+								
+							} else {
+								rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
+								rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
+								rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
+								rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
+							}
 							rule.field[ACL::SRCP_FIELD_IPV4].value.u16 = 0;
 							rule.field[ACL::SRCP_FIELD_IPV4].mask_range.u16 = 65535;
-							rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
-							rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
-	
-							rule.data.userdata = entry.second;
+							if(entry.second == ACL::ACL_NOTIFY)
+							{
+								rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = 80;
+								rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = 80;
+								
+							} else {
+								rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
+								rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
+							}
+							if(entry.second == ACL::ACL_NOTIFY)
+							{
+								rule.data.userdata = (group_id << 4) | entry.second;
+							} else {
+								rule.data.userdata = entry.second;
+							}
 							rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
 							rule.data.category_mask = 1;
 
