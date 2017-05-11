@@ -21,12 +21,13 @@ struct subscriber
 	uint64_t last_redirect;
 	uint64_t next_redirect;
 	uint64_t redirects;
-	
+	int repeat;
 	subscriber()
 	{
 		last_redirect = 0;
 		next_redirect = 0;
 		redirects = 0;
+		repeat = 0;
 	}
 };
 
@@ -35,6 +36,7 @@ struct NotificationParams
 	int group_id;
 	struct CSender::params prm;
 	int period;
+	int repeat;
 };
 
 class UpdateNotification: public Poco::Notification

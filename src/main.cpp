@@ -660,6 +660,7 @@ void extFilter::initialize(Application& self)
 			struct NotificationParams p;
 			p.period = config().getInt(key+".period", 3600);
 			p.group_id = group_id;
+			p.repeat = config().getInt(key+".repeat", 0);
 			p.prm.code = config().getString(key+".http_code","");
 			p.prm.redirect_url = config().getString(key+".redirect_url","");
 			p.prm.send_rst_to_server = config().getBool(key+".rst_to_server", false);

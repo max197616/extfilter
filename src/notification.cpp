@@ -79,6 +79,7 @@ void NotifyManager::runTask()
 						s.last_redirect = tm;
 						s.next_redirect = tm + prm->second.period;
 						s.redirects++;
+						s.repeat = prm->second.repeat;
 						std::pair<uint32_t, struct subscriber> entry(pUpdateNf->getIP(), s);
 						subsLock.lock();
 						subs.insert(entry);
@@ -112,7 +113,13 @@ void NotifyManager::runTask()
 			{
 				if(!sub.second.need_redirect && sub.second.next_redirect < tm)
 				{
-					sub.second.need_redirect = true;
+					if(sub.second.repeat)
+					{
+						if(sub.second.repeat < sub.second.redirects)
+							sub.second.need_redirect = true;
+					} else {
+						sub.second.need_redirect = true;
+					}
 				}
 			}
 		}
