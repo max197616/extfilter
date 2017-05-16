@@ -419,6 +419,7 @@ sub make_special_chars
 	{
 		$url =~ s/\%5C/\//g;
 		$logger->debug("Write changed url (slashes) to the file");
+		$url =~ s/\/\/$/\//;
 		insert_to_url($url);
 	}
 	_encode_space($url);
