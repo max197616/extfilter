@@ -400,7 +400,7 @@ int extFilter::_check_lcore_params(void)
 		}
 		if (queue >= get_port_max_rx_queues(_lcore_params[i].port_id))
 		{
-			logger().error("Ivalid queue number: %d", (int)queue);
+			logger().error("Invalid queue number: %d (nic supported maximum %d)", (int)queue, (int)get_port_max_rx_queues(_lcore_params[i].port_id));
 			return -1;
 		}
 		lcore = _lcore_params[i].lcore_id;

@@ -74,7 +74,7 @@ CSender::~CSender()
 	::close(s6);
 }
 
-void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip_to, int port_from, int port_to, uint32_t acknum, uint32_t seqnum, std::string &dt, int f_reset, int f_psh)
+void CSender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, int port_to, uint32_t acknum, uint32_t seqnum, std::string &dt, int f_reset, int f_psh)
 {
 	char datagram[4096], *data;
 	
@@ -86,12 +86,12 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 	struct ip6_hdr *iph6 = (struct ip6_hdr *) datagram;
 
 	// TCP header
-	struct tcphdr *tcph = (struct tcphdr *) (datagram + (ip_from.family() == Poco::Net::IPAddress::IPv4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)));
+	struct tcphdr *tcph = (struct tcphdr *) (datagram + (ip_ver == 4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)));
 
 	struct sockaddr_in sin;
 	struct sockaddr_in6 sin6;
 	int payloadlen=dt.size();
-	if(payloadlen > (_parameters.mtu - (ip_from.family() == Poco::Net::IPAddress::IPv4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)) + sizeof(struct tcphdr) - 12))
+	if(payloadlen > (_parameters.mtu - (ip_ver == 4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)) + sizeof(struct tcphdr) - 12))
 	{
 		_logger.warning("Size of the outgoing packet bigger than the MTU. Removing all additional data in the redirect packet.");
 		dt = rHeader;
@@ -99,15 +99,19 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 	}
 	// Data part
 	data = (char *)tcph + sizeof(struct tcphdr);
-	memcpy(data,dt.c_str(),payloadlen);
+	rte_memcpy(data, dt.c_str(), payloadlen);
 
-	_logger.debug("Trying to send packet to %s port %d", ip_to.toString(), port_to);
+	if(_logger.getLevel() == Poco::Message::PRIO_DEBUG)
+	{
+		Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
+		_logger.debug("Trying to send packet to %s port %d", ipa.toString(), port_to);
+	}
 
-	if(ip_from.family() == Poco::Net::IPAddress::IPv4)
+	if(ip_ver == 4)
 	{
 		sin.sin_family = AF_INET;
 		sin.sin_port = htons(port_to);
-		sin.sin_addr.s_addr=((in_addr *)ip_to.addr())->s_addr;
+		sin.sin_addr.s_addr = ((in_addr *)ip_to)->s_addr;
 		// Fill the IPv4 header
 		iph->ihl = 5;
 		iph->version = 4;
@@ -118,12 +122,12 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		iph->ttl = _parameters.ttl;
 		iph->protocol = IPPROTO_TCP;
 		iph->check = 0;
-		iph->saddr = ((in_addr *)ip_from.addr())->s_addr;
+		iph->saddr = ((in_addr *)ip_from)->s_addr;
 		iph->daddr = sin.sin_addr.s_addr;
 	} else {
 		sin6.sin6_family = AF_INET6;
 		sin6.sin6_port = 0; // not filled in ipv6
-		memcpy(&sin6.sin6_addr,ip_to.addr(),sizeof(sin6.sin6_addr));
+		rte_mov16((uint8_t *)&sin6.sin6_addr, (uint8_t *)ip_to);
 		// IPv6 version (4 bits), Traffic class (8 bits), Flow label (20 bits)
 		iph6->ip6_flow = htonl ((6 << 28) | (0 << 20) | 0);
 		// Payload length (16 bits): TCP header + TCP data
@@ -132,8 +136,8 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		iph6->ip6_nxt = IPPROTO_TCP;
 		 // Hop limit (8 bits): default to maximum value
 		iph6->ip6_hops = 250;
-		memcpy(&iph6->ip6_src,ip_from.addr(),sizeof(in6_addr));
-		memcpy(&iph6->ip6_dst,ip_to.addr(),sizeof(in6_addr));
+		rte_mov16((uint8_t *)&iph6->ip6_src, (uint8_t *)ip_from);
+		rte_mov16((uint8_t *)&iph6->ip6_dst, (uint8_t *)ip_to);
 	}
 
 	// TCP Header
@@ -154,7 +158,7 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		tcph->ack_seq = seqnum;
 		tcph->ack = 1;
 		tcph->fin = 1;
-		tcph->window = htons(5850);
+		tcph->window = htons(5862);
 	}
 	tcph->urg = 0;
 	tcph->check = 0;
@@ -162,7 +166,7 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 
 
 
-	if(ip_from.family() == Poco::Net::IPAddress::IPv4)
+	if(ip_ver == 4)
 	{
 		iph->tot_len = rte_cpu_to_be_16(iph->tot_len);
 		tcph->check = rte_ipv4_udptcp_cksum((const ipv4_hdr*)iph,tcph);
@@ -170,38 +174,23 @@ void CSender::sendPacket(Poco::Net::IPAddress &ip_from, Poco::Net::IPAddress &ip
 		// Send the packet
 		if( ::sendto( this->s, datagram, iph->tot_len, 0, (struct sockaddr *)&sin, sizeof(sin)) < 0 )
 		{
-			_logger.error("sendto() failed to %s:%d errno: %d",ip_to.toString(), port_to, errno);
+			Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
+			_logger.error("sendto() failed to %s:%d errno: %d",ipa.toString(), port_to, errno);
 		}
 	} else {
 		tcph->check = rte_ipv6_udptcp_cksum((const ipv6_hdr*)iph6,tcph);
-
 		// Send the packet
 		if( ::sendto( this->s6, datagram, (sizeof(struct ip6_hdr) + sizeof(struct tcphdr) + payloadlen), 0, (struct sockaddr *)&sin6, sizeof(sin6)) < 0 )
 		{
-			_logger.error("sendto() failed to [%s]:%d errno: %d",ip_to.toString(), port_to, errno);
+			Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
+			_logger.error("sendto() failed to [%s]:%d errno: %d",ipa.toString(), port_to, errno);
 		}
 	}
 
 	return;
 }
 
-void CSender::Redirect(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param)
-{
-	std::unique_ptr<Poco::Net::IPAddress> _ip_from;
-	std::unique_ptr<Poco::Net::IPAddress> _ip_to;
-	if(ip_ver == 4)
-	{
-		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in_addr)));
-		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in_addr)));
-	} else {
-		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in6_addr)));
-		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in6_addr)));
-	}
-	Redirect(user_port, dst_port, *_ip_from, *_ip_to, acknum, seqnum, f_psh, additional_param);
-}
-
-//void CSender::sendPacket(char *ip_from, char *ip_to, int port_from, int port_to, uint32_t acknum, uint32_t seqnum)
-void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param )
+void CSender::Redirect(int user_port, int dst_port, void *user_ip, void *dst_ip, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh, std::string &additional_param)
 {
 	// формируем дополнительные параметры
 	std::string tstr = rHeader;
@@ -214,39 +203,25 @@ void CSender::Redirect(int user_port, int dst_port, Poco::Net::IPAddress &user_i
 			tstr = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + additional_param + "\r\nConnection: close\r\n";
 		}
 	}
-	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, tstr, 0, f_psh);
+	this->sendPacket(dst_ip, user_ip, ip_ver, dst_port, user_port, acknum, seqnum, tstr, 0, f_psh);
 	
 	// And reset session with server
 	if(_parameters.send_rst_to_server)
 	{
 		std::string empty_str;
-		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
+		this->sendPacket(user_ip, dst_ip, ip_ver, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
 	}
 	return;
 }
 
-void CSender::SendRST(int user_port, int dst_port, void *ip_from, void *ip_to, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh)
-{
-	std::unique_ptr<Poco::Net::IPAddress> _ip_from;
-	std::unique_ptr<Poco::Net::IPAddress> _ip_to;
-	if(ip_ver == 4)
-	{
-		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in_addr)));
-		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in_addr)));
-	} else {
-		_ip_from.reset(new Poco::Net::IPAddress(ip_from,sizeof(in6_addr)));
-		_ip_to.reset(new Poco::Net::IPAddress(ip_to,sizeof(in6_addr)));
-	}
-	SendRST(user_port, dst_port, *_ip_from, *_ip_to, acknum, seqnum, f_psh);
-}
-
-void CSender::SendRST(int user_port, int dst_port, Poco::Net::IPAddress &user_ip, Poco::Net::IPAddress &dst_ip, uint32_t acknum, uint32_t seqnum, int f_psh)
+void CSender::SendRST(int user_port, int dst_port, void *user_ip, void *dst_ip, int ip_ver, uint32_t acknum, uint32_t seqnum, int f_psh)
 {
 	std::string empty_str;
 	// send rst to the client
-	this->sendPacket(dst_ip, user_ip, dst_port, user_port, acknum, seqnum, empty_str, 1, 0);
+	this->sendPacket(dst_ip, user_ip, ip_ver, dst_port, user_port, acknum, seqnum, empty_str, 1, 0);
 	// send rst to the server
 	if(_parameters.send_rst_to_server)
-		this->sendPacket(user_ip, dst_ip, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
+		this->sendPacket(user_ip, dst_ip, ip_ver, user_port, dst_port, seqnum, acknum, empty_str, 1, 0);
 }
+
 
