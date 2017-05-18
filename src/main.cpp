@@ -588,7 +588,8 @@ void extFilter::initialize(Application& self)
 	if(!cli_address.empty() && _cmdline_port)
 		_cmdline_ip.parse(cli_address);
 
-
+	int _mem_channels = config().getInt("memory_channels", 2);
+	
 	int coreMaskToUse=config().getInt("core_mask", 0);
 
 
@@ -596,7 +597,7 @@ void extFilter::initialize(Application& self)
 	std::stringstream dpdkParamsStream;
 	dpdkParamsStream << commandName().c_str() << " ";
 	dpdkParamsStream << "-n ";
-	dpdkParamsStream << "2 ";
+	dpdkParamsStream << _mem_channels << " ";
 	dpdkParamsStream << "-c ";
 	dpdkParamsStream << "0x" << std::hex << std::setw(2) << std::setfill('0') << coreMaskToUse << " ";
 	dpdkParamsStream << "--master-lcore ";
