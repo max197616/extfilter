@@ -141,7 +141,12 @@ while (my $ips = $sth->fetchrow_hashref())
 		{
 			next if(defined $ssl_ip{$ip});
 			$ssl_ip{$ip}=1;
-			print $SSL_IPS_FILE "$ip","\n";
+			if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+			{
+				print $SSL_IPS_FILE "$ip","\n";
+			} else {
+				print $SSL_IPS_FILE "[$ip]","\n";
+			}
 		}
 	}
 }
