@@ -79,6 +79,7 @@ my %https_add_ports;
 
 my %ssl_hosts;
 my %ssl_ip;
+my %hosts;
 
 my $n_masked_domains = 0;
 my %masked_domains;
@@ -141,12 +142,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		{
 			next if(defined $ssl_ip{$ip});
 			$ssl_ip{$ip}=1;
-			if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
-			{
-				print $SSL_IPS_FILE "$ip","\n";
-			} else {
-				print $SSL_IPS_FILE "[$ip]","\n";
-			}
+			print $SSL_IPS_FILE "$ip","\n";
 		}
 	}
 }
@@ -198,21 +194,22 @@ while (my $ips = $sth->fetchrow_hashref())
 		}
 	}
 	next if($skip);
-	if(defined $domains{$host})
+	if($host !~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/ && $scheme ne 'https' && defined $domains{$host})
 	{
 #		$logger->warn("Host '$host' from url '$url2' present in the domains");
 		next;
 	}
 	if($scheme eq 'https')
 	{
-		next if(defined $ssl_hosts{$host});
-		$ssl_hosts{$host}=1;
-		print $SSL_HOST_FILE (length($host) > 47 ? (substr($host,0,47)."\n"): "$host\n");
-		if($host =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
+		if($host =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/ && !defined $hosts{"$host:$port"})
 		{
 			#print "Host name is an ip address, add to ip:port file\n";
 			print $HOSTS_FILE "$host:", $port ,"\n";
+			$hosts{"$host:$port"} = 1;
 		}
+		next if(defined $ssl_hosts{$host});
+		$ssl_hosts{$host}=1;
+		print $SSL_HOST_FILE (length($host) > 47 ? (substr($host,0,47)."\n"): "$host\n");
 		if($port ne "443")
 		{
 			$logger->info("Adding $port to https protocol");
@@ -442,7 +439,7 @@ sub make_special_chars
 		if($str ne $orig_rkn)
 		{
 			$logger->debug("Write url in cp1251 to the file");
-			print $URLS_FILE $str."\n";
+			print $URLS_FILE (length($str) > 600 ? (substr($str,0,600)): "$str")."\n";
 		}
 		if($url ne $orig_rkn)
 		{
@@ -459,5 +456,5 @@ sub insert_to_url
 	my $sum = md5($encoded);
 	return if(defined $already_out{$sum});
 	$already_out{$sum}=1;
-	print $URLS_FILE $encoded."\n";
+	print $URLS_FILE (length($encoded) > 600 ? (substr($encoded,0,600)): "$encoded")."\n";
 }
