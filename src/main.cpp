@@ -11,7 +11,7 @@
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
 #include <rte_ip.h>
-
+#include <signal.h>
 #include <iostream>
 #include <vector>
 #include <sstream>
@@ -20,7 +20,6 @@
 #include "main.h"
 
 #include "AhoCorasickPlus.h"
-#include "qdpi.h"
 #include "sendertask.h"
 #include "statistictask.h"
 #include "reloadtask.h"
@@ -933,17 +932,7 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].add_p_type = _add_p_type;
 				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
 				workerConfigArr[lcore_id].nm = nm;
-				workerConfigArr[lcore_id].ndpi_struct = init_ndpi();
-				if (!workerConfigArr[lcore_id].ndpi_struct)
-				{
-					logger().fatal("Can't initialize nDPI!");
-					return Poco::Util::Application::EXIT_CONFIG;
-				}
-				if(!_protocolsFile.empty())
-				{
-					logger().debug("Loading nDPI protocols from file %s", _protocolsFile);
-					ndpi_load_protocols_file(workerConfigArr[lcore_id].ndpi_struct, (char *)_protocolsFile.c_str());
-				}
+
 				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker[lcore_id]);
 
 				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker[lcore_id]);

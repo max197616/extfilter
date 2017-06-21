@@ -26,6 +26,7 @@
 #include <rte_config.h>
 #include <rte_common.h>
 #include <rte_ethdev.h>
+#include <sys/time.h>
 
 #include "statistictask.h"
 #include "stats.h"

@@ -153,12 +153,12 @@ void CSender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 		tcph->ack = 1;
 		tcph->ack_seq = seqnum;
 		tcph->fin = 0;
-		tcph->window = 0;
+		tcph->window = htons(0xEF);
 	} else {
 		tcph->ack_seq = seqnum;
 		tcph->ack = 1;
 		tcph->fin = 1;
-		tcph->window = htons(5862);
+		tcph->window = htons(5870);
 	}
 	tcph->urg = 0;
 	tcph->check = 0;

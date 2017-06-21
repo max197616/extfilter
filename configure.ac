@@ -2,13 +2,10 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.62, max1976@mail.ru)
+AC_INIT(extFilter, 0.70, max1976@mail.ru)
 
 DPDK_HOME=
 DPDK_TARGET=
-
-NDPI_HOME=./nDPI
-NDPI_GIT_VERSION=dev
 
 AM_INIT_AUTOMAKE()
 
@@ -163,47 +160,6 @@ fi
 AC_SUBST(DPDK_LIB,$DPDK_HOME/$DPDK_TARGET/lib)
 AC_SUBST(DPDK_INCLUDE,$DPDK_HOME/$DPDK_TARGET/include)
 
-dnl nDPI checks...
-AC_MSG_CHECKING(for nDPI $NDPI_HOME)
-if test -d "$NDPI_HOME" ; then :
-    AC_MSG_RESULT(found in $NDPI_HOME)
-else
-    AC_MSG_RESULT(not found)
-    AC_MSG_NOTICE(Getting nDPI from git)
-    git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch; patch -p1 < ../ndpi-ssl-2.patch ; cd -
-    AC_MSG_CHECKING(for nDPI $NDPI_HOME)
-    if test -d "$NDPI_HOME" ; then :
-	AC_MSG_RESULT(found in $NDPI_HOME)
-    else
-	AC_MSG_ERROR(Install nDPI dev: git clone -b $NDPI_GIT_VERSION https://github.com/ntop/nDPI.git $NDPI_HOME; cd $NDPI_HOME; git checkout f51fef6 ; patch -p1 < ../ndpi-ssl.patch ; patch -p1 < ../ndpi-ssl-2.patch ; ./autogen.sh; make; cd - )
-    fi
-fi
-
-NDPI_LIB=$NDPI_HOME/src/lib/.libs/libndpi.a
-AC_MSG_CHECKING(for $NDPI_LIB)
-if test -f "$NDPI_LIB" ; then :
-
-else
-    AC_MSG_RESULT([not found, compiling...])
-    cd $NDPI_HOME; ./autogen.sh; make; cd -
-fi
-AC_MSG_RESULT(yes)
-
-save_flags="${CXXFLAGS}"
-CXXFLAGS="${CXXFLAGS} -I${NDPI_HOME}/src/include"
-AC_MSG_CHECKING(for compiling with nDPI)
-save_libs="${LIBS}"
-LIBS="$NDPI_LIB"
-AC_LINK_IFELSE(
-         [AC_LANG_PROGRAM(
-             [#include "ndpi_api.h"],
-             [ndpi_revision();]
-         )],
-         [LIBS="$save_libs"],
-         [AC_MSG_ERROR([Linking with nDPI failed!])]
-)
-AC_MSG_RESULT(yes)
-CXXFLAGS="$save_flags"
-
+AC_CHECK_LIB([boost_regex], [main], , AC_MSG_ERROR([boost_regex library not found.]))
 
 AC_OUTPUT(Makefile src/Makefile include/Makefile)

@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include <ndpi_api.h>
 #include <string>
 #include <rte_config.h>
 #include <rte_malloc.h>
@@ -13,6 +12,8 @@
 #include <Poco/Notification.h>
 #include <Poco/NotificationQueue.h>
 #include <Poco/Task.h>
+
+#include "flowtrk.h"
 
 /*
  * FlowHash создается на каждый worker.
@@ -31,25 +32,10 @@
 #define SIZEOF_FLOW_STRUCT (sizeof(struct ndpi_flow_struct))
 
 
-/*struct ipv4_5tuple {
-	uint32_t ip_dst;
-	uint32_t ip_src;
-	uint16_t port_dst;
-	uint16_t port_src;
-	uint8_t  proto;
-} __attribute__((__packed__));
-*/
+#define __FLOW_TRACKING 1
 
 #define IPV6_ADDR_LEN 16
 
-/*struct ipv6_5tuple {
-	uint8_t  ip_dst[IPV6_ADDR_LEN];
-	uint8_t  ip_src[IPV6_ADDR_LEN];
-	uint16_t port_dst;
-	uint16_t port_src;
-	uint8_t  proto;
-} __attribute__((__packed__));
-*/
 union ipv4_5tuple_host {
 	struct {
 		uint8_t  pad0;
@@ -107,30 +93,34 @@ struct ndpi_flow_info
 {
 	uint32_t hash;
 	bool detection_completed;
-	struct ndpi_flow_struct *ndpi_flow;
 	u_int8_t ip_version;
 	u_int64_t last_seen;
 	u_int64_t bytes;
 	u_int32_t packets;
-	ndpi_protocol detected_protocol;
-
-
-	void *src_id;
-	void *dst_id;
-
+	struct http
+	{
+		char *url;
+		uint8_t method;
+	} http;
+	struct ssl
+	{
+		char *client_certificate;
+	} ssl;
+	uint8_t l7_proto;
+	int seen_flows;
+#ifdef __FLOW_TRACKING
+	FlowTracker *flow_tracker;
+#endif
 	uint64_t expire;
 	bool cli2srv_direction;
 	bool block;
 	ndpi_flow_info(uint8_t ip_ver, uint64_t l_seen) :
 		hash(0),
 		detection_completed(false),
-		ndpi_flow(NULL),
 		ip_version(ip_ver),
 		last_seen(l_seen),
 		bytes(0),
 		packets(0),
-		src_id(NULL),
-		dst_id(NULL),
 		expire(0),
 		cli2srv_direction(true),
 		block(false)
@@ -140,17 +130,15 @@ struct ndpi_flow_info
 	ndpi_flow_info() :
 		hash(0),
 		detection_completed(false),
-		ndpi_flow(NULL),
 		ip_version(0),
 		last_seen(0),
 		bytes(0),
 		packets(0),
-		src_id(NULL),
-		dst_id(NULL),
 		expire(0),
 		cli2srv_direction(true),
 		block(false)
-	{ }
+	{
+	}
 
 	bool isIdle(uint64_t time)
 	{
@@ -159,59 +147,14 @@ struct ndpi_flow_info
 	
 	void free_mem()
 	{
-		ndpi_free_flow(ndpi_flow);
-		if(src_id)
-			free(src_id);
-		if(dst_id)
-			free(dst_id);
+		if(flow_tracker)
+			delete flow_tracker;
+		if(http.url)
+			free(http.url);
+		if(ssl.client_certificate)
+			free(ssl.client_certificate);
 	}
 };
-
-class FreeFINotification: public Poco::Notification
-{
-public:
-	typedef Poco::AutoPtr<FreeFINotification> Ptr;
-	
-	FreeFINotification(struct ndpi_flow_struct *nf, void *src_id, void *dst_id):
-		_ndpi_flow(nf),
-		_src_id(src_id),
-		_dst_id(dst_id)
-	{
-	}
-	
-	void *getSrcId()
-	{
-		return _src_id;
-	}
-
-	void *getDstId()
-	{
-		return _dst_id;
-	}
-
-	struct ndpi_flow_struct *getNDPIFlow()
-	{
-		return _ndpi_flow;
-	}
-private:
-	struct ndpi_flow_struct *_ndpi_flow;
-	void *_src_id;
-	void *_dst_id;
-};
-
-class FreeFITask: public Poco::Task
-{
-public:
-	FreeFITask();
-	~FreeFITask();
-
-	void runTask();
-
-	static Poco::NotificationQueue queue;
-private:
-	Poco::Logger& _logger;
-};
-
 
 class flowHash
 {

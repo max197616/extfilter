@@ -8,7 +8,6 @@
 #include <Poco/Mutex.h>
 #include <Poco/HashMap.h>
 #include <Poco/Logger.h>
-#include <ndpi_api.h>
 #include <rte_hash.h>
 #include "dtypes.h"
 #include "AhoCorasickPlus.h"
@@ -27,7 +26,7 @@
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
 
-#define URI_RESERVATION_SIZE 2048
+#define URI_RESERVATION_SIZE 4096
 
 /* Configure how many packets ahead to prefetch, when reading packets */
 #define PREFETCH_OFFSET 3
@@ -49,9 +48,6 @@ struct WorkerConfig
 	bool block_undetected_ssl;
 	bool http_redirect;
 	enum ADD_P_TYPES add_p_type;
-	struct ndpi_detection_module_struct *ndpi_struct;
-//	uint32_t max_ndpi_flows;
-//	uint32_t num_roots;
 
 	EntriesData *entriesData;
 
@@ -72,7 +68,6 @@ struct WorkerConfig
 		block_undetected_ssl = false;
 		http_redirect = true;
 		add_p_type = A_TYPE_NONE;
-		ndpi_struct = NULL;
 		url_normalization = true;
 		remove_dot = true;
 		notify_enabled = false;

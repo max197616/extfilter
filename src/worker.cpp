@@ -24,8 +24,324 @@
 #include "acl.h"
 #include <rte_hash.h>
 #include "notification.h"
+#include "dpi.h"
+#include <boost/regex.hpp>
 
 #define tcphdr(x)	((struct tcphdr *)(x))
+
+#define MAX_PAYLOAD 3000
+
+//boost::regex request_regex("^([\\w]+)\\s+([^ ]+).+\r\nHost:\\s*([^ ]+)\r\n", boost::regex::icase);
+
+boost::regex request_regex("^(OPTIONS|GET|HEAD|POST|PUT|PATCH|DELETE|TRACE|CONNECT)\\s+([^ ]+).+\r\nHost:\\s*([^ ]+)\r\n", boost::regex::icase);
+
+
+static int getSSLcertificate(uint8_t *payload, u_int payload_len, char *buffer, u_int buffer_len, ndpi_flow_info *fl)
+{
+	if(payload[0] == 0x16 /* Handshake */)
+	{
+		u_int16_t total_len  = (payload[3] << 8) + payload[4] + 5 /* SSL Header */;
+		u_int8_t handshake_protocol = payload[5]; /* handshake protocol a bit misleading, it is message type according TLS specs */
+
+		/* Truncate total len, search at least in incomplete packet */
+/*		if(total_len > payload_len)
+			total_len = payload_len;
+*/
+		if(total_len <= 4)
+			return 0;
+
+		// skip big packets...
+		if(total_len > MAX_PAYLOAD)
+			return 0;
+
+		if(total_len > payload_len && handshake_protocol == 0x01)
+		{
+			return 3; // need more data
+		}
+
+		memset(buffer, 0, buffer_len);
+
+		/* At least "magic" 3 bytes, null for string end, otherwise no need to waste cpu cycles */
+		{
+/*			int i;
+			
+			if(handshake_protocol == 0x02 || handshake_protocol == 0xb)
+			{
+				u_int num_found = 0;
+				flow->l4.tcp.ssl_seen_server_cert = 1;
+				// Check after handshake protocol header (5 bytes) and message header (4 bytes)
+				for(i = 9; i < payload_len-3; i++)
+				{
+					if(((payload[i] == 0x04) && (payload[i+1] == 0x03) && (payload[i+2] == 0x0c))
+					|| ((payload[i] == 0x04) && (payload[i+1] == 0x03) && (payload[i+2] == 0x13))
+					|| ((payload[i] == 0x55) && (payload[i+1] == 0x04) && (payload[i+2] == 0x03)))
+					{
+						u_int8_t server_len = payload[i+3];
+						if(payload[i] == 0x55)
+						{
+							num_found++;
+							if(num_found != 2)
+								continue;
+						}
+						if(server_len+i+3 < payload_len)
+						{
+							char *server_name = (char*)&payload[i+4];
+							u_int8_t begin = 0, len, j, num_dots;
+							while(begin < server_len)
+							{
+								if(!ndpi_isprint(server_name[begin]))
+									begin++;
+								else
+									break;
+							}
+							len = buffer_len-1;
+							strncpy(buffer, &server_name[begin], len);
+							buffer[len] = '\0';
+							// We now have to check if this looks like an IP address or host name
+							for(j=0, num_dots = 0; j<len; j++)
+							{
+								if(!ndpi_isprint((buffer[j])))
+								{
+									num_dots = 0; // This is not what we look for
+									break;
+								} else if(buffer[j] == '.')
+								{
+									num_dots++;
+									if(num_dots >=2)
+										break;
+								}
+							}
+							if(num_dots >= 2)
+							{
+								stripCertificateTrailer(buffer, buffer_len);
+								snprintf(flow->protos.ssl.server_certificate, sizeof(flow->protos.ssl.server_certificate), "%s", buffer);
+								return 1;
+							}
+						}
+					}
+				}
+			} else if(handshake_protocol == 0x01 )*/
+			if(handshake_protocol == 0x01)
+			{
+				u_int offset, base_offset = 43;
+				if (base_offset + 2 <= payload_len)
+				{
+					u_int16_t session_id_len = payload[base_offset];
+					if((session_id_len+base_offset+2) <= total_len)
+					{
+						u_int16_t cypher_len =  payload[session_id_len+base_offset+2] + (payload[session_id_len+base_offset+1] << 8);
+						offset = base_offset + session_id_len + cypher_len + 2;
+						//flow->l4.tcp.ssl_seen_client_cert = 1;
+						if(offset < total_len)
+						{
+							u_int16_t compression_len;
+							u_int16_t extensions_len;
+							compression_len = payload[offset+1];
+							offset += compression_len + 3;
+							if(offset < total_len)
+							{
+								extensions_len = payload[offset];
+								if((extensions_len+offset) < total_len)
+								{
+									/* Move to the first extension
+									Type is u_int to avoid possible overflow on extension_len addition */
+									u_int extension_offset = 1;
+									while(extension_offset < extensions_len)
+									{
+										u_int16_t extension_id, extension_len;
+										memcpy(&extension_id, &payload[offset+extension_offset], 2);
+										extension_offset += 2;
+										memcpy(&extension_len, &payload[offset+extension_offset], 2);
+										extension_offset += 2;
+										extension_id = ntohs(extension_id), extension_len = ntohs(extension_len);
+										if(extension_id == 0)
+										{
+											u_int begin = 0,len;
+											char *server_name = (char*)&payload[offset+extension_offset];
+											if(payload[offset+extension_offset+2] == 0x00) // host_name
+												begin =+ 5;
+											while(begin < extension_len)
+											{
+												if((!ndpi_isprint(server_name[begin])) || ndpi_ispunct(server_name[begin]) || ndpi_isspace(server_name[begin]))
+													begin++;
+												else
+													break;
+											}
+											len = (u_int)RTE_MIN(extension_len-begin, buffer_len-1);
+											memcpy(buffer, &server_name[begin], len);
+											buffer[len] = '\0';
+											stripCertificateTrailer(buffer, buffer_len);
+											if(!fl->ssl.client_certificate)
+											{
+												fl->ssl.client_certificate = (char *)calloc(1, len + 1);
+												memcpy(fl->ssl.client_certificate, buffer, len);
+											}
+											fl->detection_completed = true;
+											return 2;
+										}
+										extension_offset += extension_len;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+static int detectSSLFromCertificate(ndpi_flow_info *fl, uint8_t *payload, int payload_len)
+{
+	if((payload_len > 9) && (payload[0] == 0x16 /* consider only specific SSL packets (handshake) */))
+	{
+		char certificate[64];
+		certificate[0] = '\0';
+		int rc = getSSLcertificate(payload, payload_len, certificate, sizeof(certificate), fl);
+//		fl->ssl.certificate_num_checks++;
+		if(rc > 0)
+		{
+//			fl->ssl.certificates_detected++;
+			fl->l7_proto = DPI_PROTOCOL_TCP_SSL;
+			return rc;
+		}
+	}
+	return 0;
+}
+
+
+static uint8_t detect_ssl(uint8_t *payload, int payload_len, ndpi_flow_info *fl)
+{
+	int res = detectSSLFromCertificate(fl, payload, payload_len);
+	if(res > 0)
+	{
+		if(res == 3)
+			return DPI_PROTOCOL_MORE_DATA_NEEDED;
+		return DPI_PROTOCOL_MATCHES;
+	}
+	return DPI_PROTOCOL_NO_MATCHES;
+}
+
+static uint8_t detect_ssl(FlowTracker &tr, ndpi_flow_info *fl)
+{
+	if(fl->seen_flows > 1)
+		return detect_ssl(tr.payload().data(), tr.payload().size(), fl);
+	else
+		return DPI_PROTOCOL_MORE_DATA_NEEDED;
+}
+
+static uint8_t detect_http(uint8_t *payload, int payload_len, ndpi_flow_info *fl)
+{
+	bool need_check_data = false;
+	int method_offset = 0;
+	if(fl->seen_flows == 1)
+	{
+		for(int i = 0; i < payload_len; i++)
+		{
+			if(payload[i] == ' ' || payload[i] == '\r' || payload[i] == '\n')
+			{
+				method_offset++;
+				continue;
+			}
+			switch (payload[i])
+			{
+				case 'O':  need_check_data = true; break;
+				case 'G':  need_check_data = true; break;
+				case 'H':  need_check_data = true; break;
+				case 'P':  need_check_data = true; break;
+				case 'D':  need_check_data = true; break;
+				case 'T':  need_check_data = true; break;
+				case 'C':  need_check_data = true; break;
+				default:
+					break;
+			}
+			break;
+		}
+	}
+	if(need_check_data || fl->seen_flows > 1)
+	{
+		fl->l7_proto = DPI_PROTOCOL_TCP_HTTP;
+		boost::match_results<char *> client_match;
+		bool valid = boost::regex_search((char *)payload+method_offset, (char *)payload+payload_len, client_match, request_regex);
+		if (valid)
+		{
+			if(client_match[1].second - client_match[1].first < 3)
+				fl->http.method = HTTP_METHOD_UNKNOWN;
+			else {
+				switch(client_match[1].first[0])
+				{
+					case 'O':  fl->http.method = HTTP_METHOD_OPTIONS; break;
+					case 'G':  fl->http.method = HTTP_METHOD_GET; break;
+					case 'H':  fl->http.method = HTTP_METHOD_HEAD; break;
+					case 'P':
+							switch(client_match[1].first[1])
+							{
+								case 'O': fl->http.method = HTTP_METHOD_POST; break;
+								case 'U': fl->http.method = HTTP_METHOD_PUT; break;
+							}
+							break;
+					case 'D':   fl->http.method = HTTP_METHOD_DELETE; break;
+					case 'T':   fl->http.method = HTTP_METHOD_TRACE; break;
+					case 'C':   fl->http.method = HTTP_METHOD_CONNECT; break;
+					default:
+							fl->http.method = HTTP_METHOD_UNKNOWN;
+							break;
+				}
+			}
+			if(fl->http.url == NULL)
+			{
+				int host_len = client_match[3].second-client_match[3].first;
+				int url_len = client_match[2].second - client_match[2].first;
+				int size = host_len + url_len + 8;
+				fl->http.url = (char *)calloc(1, size);
+				memcpy(fl->http.url, "http://", 7);
+				memcpy(&fl->http.url[7], client_match[3].first, host_len);
+				memcpy(&fl->http.url[7+host_len], client_match[2].first, url_len);
+			}
+			fl->detection_completed = true;
+			return DPI_PROTOCOL_MATCHES;
+		}
+		return DPI_PROTOCOL_MORE_DATA_NEEDED;
+	}
+	return DPI_PROTOCOL_NO_MATCHES;
+}
+
+static uint8_t detect_http(FlowTracker &tr, ndpi_flow_info *fl)
+{
+	if(fl->seen_flows > 1)
+		return detect_http(tr.payload().data(), tr.payload().size(), fl);
+	else
+		return DPI_PROTOCOL_MORE_DATA_NEEDED;
+}
+
+// check only first packet for the high speed...
+static uint8_t detect_protocol(uint8_t *payload, int payload_len, ndpi_flow_info *fl)
+{
+	if(fl->seen_flows == 1)
+	{
+		uint8_t dpi_det_status = DPI_PROTOCOL_NO_MATCHES;
+		if((dpi_det_status = detect_ssl(payload, payload_len, fl)) == DPI_PROTOCOL_NO_MATCHES)
+			return detect_http(payload, payload_len, fl);
+		return dpi_det_status;
+	}
+	return DPI_PROTOCOL_NO_MATCHES;
+}
+
+void onDataCallback(FlowTracker &tr, void *obj)
+{
+	ndpi_flow_info *fl = (ndpi_flow_info *) obj;
+	uint8_t dpi_det_status = DPI_PROTOCOL_NO_MATCHES;
+	dpi_det_status = detect_ssl(tr,fl);
+	if((dpi_det_status = detect_ssl(tr,fl)) == DPI_PROTOCOL_NO_MATCHES)
+	{
+		dpi_det_status = detect_http(tr, fl);
+	}
+	if(tr.payload().size() > MAX_PAYLOAD || dpi_det_status == DPI_PROTOCOL_MATCHES || dpi_det_status == DPI_PROTOCOL_NO_MATCHES)
+	{
+		tr.ignore_data_packets();
+	}
+}
 
 //#define DEBUG_TIME
 
@@ -94,30 +410,15 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, int ip_version, uint64_
 			newflow->ip_version = 6;
 			newflow->cli2srv_direction = true;
 			newflow->block = false;
-//			memcpy(&newflow->keys.ipv6_key, &host_key, sizeof(union ipv6_5tuple_host));
-			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
-			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
-			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
-			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
-			{
-				_logger.fatal("Not enough memory for the flow");
-				return NULL;
-			}
 			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
 			if(ret == -EINVAL)
 			{
-				free(newflow->src_id);
-				free(newflow->dst_id);
-				free(newflow->ndpi_flow);
 				rte_mempool_put(flows_pool,newflow);
 				_logger.fatal("Bad parameters in hash add");
 				return NULL;
 			}
 			if(ret == -ENOSPC)
 			{
-				free(newflow->src_id);
-				free(newflow->dst_id);
-				free(newflow->ndpi_flow);
 				rte_mempool_put(flows_pool,newflow);
 				_logger.fatal("There is no space in the ipv6 flow hash");
 				return NULL;
@@ -156,30 +457,15 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, int ip_version, uint64_
 			newflow->ip_version = 4;
 			newflow->cli2srv_direction = true;
 			newflow->block = false;
-//			rte_memcpy(&newflow->keys.ipv4_key, &host_key, sizeof(union ipv4_5tuple_host));
-			newflow->src_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
-			newflow->dst_id = (struct ndpi_id_struct*)calloc(1, SIZEOF_ID_STRUCT);
-			newflow->ndpi_flow = (struct ndpi_flow_struct *)calloc(1, SIZEOF_FLOW_STRUCT);
-			if(newflow->src_id == NULL || newflow->dst_id == NULL || newflow->ndpi_flow == NULL)
-			{
-				_logger.fatal("Not enough memory for the flow");
-				return NULL;
-			}
 			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
 			if(ret == -EINVAL)
 			{
-				free(newflow->src_id);
-				free(newflow->dst_id);
-				free(newflow->ndpi_flow);
 				rte_mempool_put(flows_pool,newflow);
 				_logger.fatal("Bad parameters in hash add");
 				return NULL;
 			}
 			if(ret == -ENOSPC)
 			{
-				free(newflow->src_id);
-				free(newflow->dst_id);
-				free(newflow->ndpi_flow);
 				rte_mempool_put(flows_pool,newflow);
 				_logger.fatal("There is no space in the ipv4 flow hash");
 				return NULL;
@@ -194,8 +480,6 @@ ndpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, int ip_version, uint64_
 	}
 	return NULL;
 }
-
-
 
 bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 {
@@ -293,7 +577,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 		return false;
 	}
 
-	payload_len = l4_packet_len-tcphlen;
+	payload_len = l4_packet_len - tcphlen;
+	uint8_t *payload = pkt_data_ptr + tcphlen;
 
 	m_ThreadStats.analyzed_packets++;
 
@@ -323,8 +608,6 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 		m_ThreadStats.sended_rst++;
 		return true;
 	}
-	/* setting time */
-	uint64_t packet_time = timestamp;
 	int32_t hash_idx;
 	ndpi_flow_info *flow_info = nullptr;
 	if(m->userdata)
@@ -341,55 +624,45 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 
 	flow_info->last_seen = timestamp;
 
+	flow_info->seen_flows++;
+	flow_info->bytes += ip_len;
+	flow_info->packets++;
+
 	if(flow_info->detection_completed && flow_info->block == false)
 		return false;
 
 	if(flow_info->detection_completed && flow_info->block == true)
 	{
 		m_ThreadStats.already_detected_blocked++;
-//		_logger.information("Got already blocked flow. Protocol %d. Src port in packet %d in flow %d, dst port in packet %d in flow %d. Source ip in packet %s in flow %d, dst ip in packet %s in flow %d", (int) flow_info->detected_protocol.protocol,(int)tcp_src_port,(int) flow_info->keys.ipv4_key.port_src,(int)tcp_dst_port,(int) flow_info->keys.ipv4_key.port_dst, src_ip->toString(), (int) flow_info->keys.ipv4_key.ip_src, dst_ip->toString(), (int) flow_info->keys.ipv4_key.ip_dst);
+		//_logger.information("Got already blocked flow. Protocol %d. Src port in packet %d in flow %d, dst port in packet %d in flow %d. Source ip in packet %s in flow %d, dst ip in packet %s in flow %d", (int) flow_info->detected_protocol.app_protocol,(int)tcp_src_port,(int) flow_info->keys.ipv4_key.port_src,(int)tcp_dst_port,(int) flow_info->keys.ipv4_key.port_dst, src_ip->toString(), (int) flow_info->keys.ipv4_key.ip_src, dst_ip->toString(), (int) flow_info->keys.ipv4_key.ip_dst);
+		return true;
 	}
 
-	flow_info->detected_protocol = ndpi_detection_process_packet(m_WorkerConfig.ndpi_struct, flow_info->ndpi_flow,
-		l3,
-		ip_len,
-		packet_time, (struct ndpi_id_struct *) flow_info->src_id, (struct ndpi_id_struct *) flow_info->dst_id);
-
-	if(flow_info->detected_protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
+	if(detect_protocol(payload, payload_len, flow_info) == DPI_PROTOCOL_MORE_DATA_NEEDED)
 	{
-		flow_info->detected_protocol = ndpi_detection_giveup(m_WorkerConfig.ndpi_struct, flow_info->ndpi_flow);
+		flow_info->flow_tracker = new FlowTracker();
 	}
-
-	if(flow_info->detected_protocol.protocol == NDPI_PROTOCOL_UNKNOWN)
+	if(flow_info->flow_tracker)
 	{
-		flow_info->detected_protocol = ndpi_guess_undetected_protocol(m_WorkerConfig.ndpi_struct,
-			ip_protocol,
-			0,//ip
-			tcp_src_port, // sport
-			0,
-			tcp_dst_port); // dport
+		flow_info->flow_tracker->data_callback(&onDataCallback, flow_info);
+		flow_info->flow_tracker->process_packet((uint8_t *)tcph, payload, payload_len);
 	}
 
-	flow_info->bytes += ip_len;
-	flow_info->packets++;
-	if(flow_info->detected_protocol.protocol != NDPI_PROTOCOL_SSL && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_SSL && flow_info->detected_protocol.protocol == NDPI_PROTOCOL_TOR && flow_info->detected_protocol.master_protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
+	if(flow_info->l7_proto != DPI_PROTOCOL_TCP_SSL && flow_info->l7_proto != DPI_PROTOCOL_TCP_HTTP)
+	{
 		flow_info->detection_completed = true;
+	}
 
-	if(flow_info->detected_protocol.master_protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_SSL || flow_info->detected_protocol.protocol == NDPI_PROTOCOL_TOR)
+	if(flow_info->l7_proto == DPI_PROTOCOL_TCP_SSL)
 	{
-		if(m_WorkerConfig.atmSSLDomains && flow_info->ndpi_flow->l4.tcp.ssl_seen_client_cert == 1)
+		if(m_WorkerConfig.atmSSLDomains)
 		{
-			std::string ssl_client;
-			if(flow_info->ndpi_flow->protos.ssl.client_certificate[0] != '\0')
-			{
-				ssl_client=flow_info->ndpi_flow->protos.ssl.client_certificate;
-//				_logger.debug("SSL client is: %s",ssl_client);
-			}
-			if(!ssl_client.empty())
+			if(flow_info->ssl.client_certificate)
 			{
 				// если не можем выставить lock, то нет смысла продолжать...
 				if(!m_WorkerConfig.atmSSLDomainsLock.tryLock())
 					return false;
+				std::string ssl_client(flow_info->ssl.client_certificate);
 #ifdef DEBUG_TIME
 				sw.reset();
 				sw.start();
@@ -453,14 +726,11 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 		return false;
 	}
 
-
-	if(flow_info->detected_protocol.master_protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_HTTP && flow_info->detected_protocol.protocol != NDPI_PROTOCOL_DIRECT_DOWNLOAD_LINK)
+	if(flow_info->l7_proto != DPI_PROTOCOL_TCP_HTTP)
 	{
-//		flow_info->detection_completed = true;
 		return false;
 	}
-
-	if((flow_info->ndpi_flow->http.method == HTTP_METHOD_GET || flow_info->ndpi_flow->http.method == HTTP_METHOD_POST || flow_info->ndpi_flow->http.method == HTTP_METHOD_HEAD) && flow_info->ndpi_flow->http.url != NULL)
+	if((flow_info->http.method == HTTP_METHOD_GET || flow_info->http.method == HTTP_METHOD_POST || flow_info->http.method == HTTP_METHOD_HEAD) && (flow_info->http.url != NULL))
 	{
 		if(m_WorkerConfig.atm)
 		{
@@ -470,16 +740,16 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 				{
 					try
 					{
-						Poco::URI uri_p(flow_info->ndpi_flow->http.url);
+						Poco::URI uri_p(flow_info->http.url);
 						uri_p.normalize();
 						uri.assign(uri_p.toString());
 					} catch (Poco::SyntaxException &ex)
 					{
-						uri.assign(flow_info->ndpi_flow->http.url);
+						uri.assign(flow_info->http.url);
 						_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
 					}
 				} else {
-					uri.assign(flow_info->ndpi_flow->http.url);
+					uri.assign(flow_info->http.url);
 				}
 				if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
 				{
