@@ -31,10 +31,7 @@
 
 #define MAX_PAYLOAD 3000
 
-//boost::regex request_regex("^([\\w]+)\\s+([^ ]+).+\r\nHost:\\s*([^ ]+)\r\n", boost::regex::icase);
-
-boost::regex request_regex("^(OPTIONS|GET|HEAD|POST|PUT|PATCH|DELETE|TRACE|CONNECT)\\s+([^ ]+).+\r\nHost:\\s*([^ ]+)\r\n", boost::regex::icase);
-
+boost::regex request_regex("^(OPTIONS|GET|HEAD|POST|PUT|PATCH|DELETE|TRACE|CONNECT)\\s+([^ ]+) HTTP.+\r\nHost:\\s*([^ ]+)\r\n", boost::regex::icase);
 
 static int getSSLcertificate(uint8_t *payload, u_int payload_len, char *buffer, u_int buffer_len, ndpi_flow_info *fl)
 {
@@ -171,7 +168,7 @@ static int getSSLcertificate(uint8_t *payload, u_int payload_len, char *buffer, 
 											memcpy(buffer, &server_name[begin], len);
 											buffer[len] = '\0';
 											stripCertificateTrailer(buffer, buffer_len);
-											if(!fl->ssl.client_certificate)
+											if(fl->ssl.client_certificate == NULL)
 											{
 												fl->ssl.client_certificate = (char *)calloc(1, len + 1);
 												memcpy(fl->ssl.client_certificate, buffer, len);
@@ -641,6 +638,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m)
 	if(detect_protocol(payload, payload_len, flow_info) == DPI_PROTOCOL_MORE_DATA_NEEDED)
 	{
 		flow_info->flow_tracker = new FlowTracker();
+		m_ThreadStats.reassembled_flows++;
 	}
 	if(flow_info->flow_tracker)
 	{

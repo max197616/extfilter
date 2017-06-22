@@ -368,6 +368,7 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.ndpi_ipv4_flows_count);
 	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.ndpi_ipv6_flows_count);
 	cmdline_printf(cl, "  Deleted flows: %" PRIu64 "\n", stats.ndpi_flows_deleted);
+	cmdline_printf(cl, "  Reassembled flows: %" PRIu64 "\n", stats.reassembled_flows);
 }
 
 static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void* data)
