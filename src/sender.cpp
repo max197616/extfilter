@@ -64,7 +64,7 @@ CSender::CSender(struct params &prm) : _logger(Poco::Logger::get("CSender")), _p
 		return;
 	}
 
-	this->rHeader = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + "\r\nConnection: close\r\n";
+	this->rHeader = "HTTP/1.1 "+_parameters.code+"\r\nLocation: " + _parameters.redirect_url + "\r\nConnection: close\r\n\r\n";
 	_logger.debug("Default header is %s", rHeader);
 }
 
@@ -93,7 +93,7 @@ void CSender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 	int payloadlen=dt.size();
 	if(payloadlen > (_parameters.mtu - (ip_ver == 4 ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)) + sizeof(struct tcphdr) - 12))
 	{
-		_logger.warning("Size of the outgoing packet bigger than the MTU. Removing all additional data in the redirect packet.");
+		_logger.warning("Size of the outgoing packet bigger than the MTU. Removing all additional data in the redirect packet. Payload: %s", dt);
 		dt = rHeader;
 		payloadlen = rHeader.size();
 	}
@@ -158,7 +158,7 @@ void CSender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 		tcph->ack_seq = seqnum;
 		tcph->ack = 1;
 		tcph->fin = 1;
-		tcph->window = htons(5870);
+		tcph->window = htons(5880);
 	}
 	tcph->urg = 0;
 	tcph->check = 0;

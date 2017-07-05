@@ -18,6 +18,8 @@
 #include <iomanip>
 #include "worker.h"
 #include "main.h"
+#include "dpi.h"
+#include <api.h>
 
 #include "AhoCorasickPlus.h"
 #include "sendertask.h"
@@ -47,6 +49,16 @@ extFilter *extFilter::_instance = NULL;
 struct rte_mempool *extFilter::packet_info_pool[NB_SOCKETS];
 struct ether_addr extFilter::ports_eth_addr[RTE_MAX_ETHPORTS];
 struct lcore_conf extFilter::_lcore_conf[RTE_MAX_LCORE];
+
+void flow_delete_cb(void* flow_specific_user_data)
+{
+	if(flow_specific_user_data)
+	{
+		struct dpi_flow_info *u = (struct dpi_flow_info *) flow_specific_user_data;
+		u->free_mem();
+		free(u);
+	}
+}
 
 extFilter::extFilter(): _helpRequested(false),
 	_listDPDKPorts(false),
@@ -178,12 +190,12 @@ static inline void em_parse_ptype(struct rte_mbuf *m)
 		pkt_info->keys.ipv6_key.xmm[0] = em_mask_key(data0, mask1.x);
 		pkt_info->keys.ipv6_key.xmm[1] = _mm_loadu_si128((__m128i *)(data1));
 		pkt_info->keys.ipv6_key.xmm[2] = em_mask_key(data2, mask2.x);
-		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
+//		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
 	} else if (tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV4))
 	{
 		void *ipv4_hdr = l3 + offsetof(struct ipv4_hdr, time_to_live);
 		pkt_info->keys.ipv4_key.xmm = em_mask_key(ipv4_hdr, mask0.x);
-		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
+//		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
 	}
 }
 
@@ -216,13 +228,13 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
 //<---->portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
 
-/*	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
-	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;*/
+	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
+	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
 
-	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
+//	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
 //	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_PROTO_MASK;
 
-	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_TCP | ETH_RSS_UDP;
+//	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_TCP | ETH_RSS_UDP;
 
 	portConf.txmode.mq_mode = ETH_MQ_TX_NONE;
 
@@ -525,12 +537,15 @@ void extFilter::initialize(Application& self)
 	loadConfiguration();
 	ServerApplication::initialize(self);
 
-	_flowhash_size = config().getInt("flowhash_size",1024*1024);
-	if(!rte_is_power_of_2(_flowhash_size))
-	{
-		logger().fatal("Size of the flowhash must be power of 2, got %d must be %d", (int) _flowhash_size, (int) rte_align32pow2(_flowhash_size));
-		throw Poco::Exception("Size of the flowhash must be power of 2");
-	}
+	_dpi_max_active_flows_ipv4 = config().getInt("dpi.max_active_flows_ipv4", 1000000);
+	_dpi_max_active_flows_ipv6 = config().getInt("dpi.max_active_flows_ipv6", 1000000);
+	_dpi_fragmentation_ipv6_state = config().getBool("dpi.fragmentation_ipv6_state", true);
+	_dpi_fragmentation_ipv4_state = config().getBool("dpi.fragmentation_ipv4_state", true);
+	if(_dpi_fragmentation_ipv4_state)
+		_dpi_fragmentation_ipv4_table_size = config().getInt("dpi.fragmentation_ipv4_table_size", 512);
+	if(_dpi_fragmentation_ipv6_state)
+		_dpi_fragmentation_ipv6_table_size = config().getInt("dpi.fragmentation_ipv6_table_size", 512);
+	_dpi_tcp_reordering = config().getBool("dpi.tcp_reordering", true);
 
 	_num_of_senders = config().getInt("num_of_senders", 1);
 	_lower_host = config().getBool("lower_host", false);
@@ -722,12 +737,6 @@ void extFilter::initialize(Application& self)
 			_nb_lcore_params++;
 			nb_lcores_per_port++;
 		}
-		uint32_t hash_size = rte_align32pow2(_flowhash_size/nb_lcores_per_port);
-		for(auto const &lcore_id : lcores)
-		{
-			_flowhash_size_per_worker[lcore_id] = hash_size;
-		}
-		logger().information("Flow hash size per worker %d for port %d", (int)hash_size, (int)i);
 	}
 	_lcore_params = _lcore_params_array;
 	if(!_nb_lcore_params)
@@ -933,13 +942,26 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
 				workerConfigArr[lcore_id].nm = nm;
 
-				logger().debug("Creating flowHash for the worker with %d entries", (int)_flowhash_size_per_worker[lcore_id]);
+				dpi_library_state_t* dpi_state=dpi_init_stateful(SIZE_IPv4_FLOW_TABLE, SIZE_IPv6_FLOW_TABLE, _dpi_max_active_flows_ipv4, _dpi_max_active_flows_ipv6);
+				dpi_set_flow_cleaner_callback(dpi_state, &flow_delete_cb);
 
-				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, _flowhash_size_per_worker[lcore_id]);
+				if(!_dpi_tcp_reordering)
+					dpi_tcp_reordering_disable(dpi_state);
+				else
+					dpi_tcp_reordering_enable(dpi_state);
+				if(_dpi_fragmentation_ipv4_state)
+					dpi_ipv4_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv4_table_size);
+				else
+					dpi_ipv4_fragmentation_disable(dpi_state);
+				if(_dpi_fragmentation_ipv6_state)
+					dpi_ipv6_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv6_table_size);
+				else
+					dpi_ipv6_fragmentation_disable(dpi_state);
+
 
 				std::string workerName("WorkerThread-" + std::to_string(lcore_id));
 				logger().debug("Preparing thread '%s'", workerName);
-				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], mFlowHash, rte_lcore_to_socket_id(lcore_id));
+				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id));
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)
@@ -952,16 +974,16 @@ int extFilter::main(const ArgVec& args)
 			}
 		}
 
-		for(const auto &port_id : ports)
-		{
-			rte_eth_stats_reset(port_id);
-		}
 
 		tm.start(new StatisticTask(_statistic_interval, _workerThreadVec, _statisticsFile, ports));
 		tm.start(new ReloadTask(this, _workerThreadVec));
 		if(_cmdline_port)
 		{
 			tm.start(new CmdLineTask(_cmdline_port, _cmdline_ip));
+		}
+		for(const auto &port_id : ports)
+		{
+			rte_eth_stats_reset(port_id);
 		}
 		waitForTerminationRequest();
 

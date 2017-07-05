@@ -13,27 +13,6 @@
 #include <Poco/NotificationQueue.h>
 #include <Poco/Task.h>
 
-#include "flowtrk.h"
-
-/*
- * FlowHash создается на каждый worker.
-*/
-
-
-#define FLOW_HASH_ENTRIES (1024*1024) // default 1M. Must be power of 2.
-
-//#define FLOW_HASH_ENTRIES (250000) // default 1M
-#define FLOW_PURGE_FRACTION 32 // work 1/N at:
-#define FLOW_PURGE_FREQUECY 1 // seconds
-
-#define FLOW_IDLE_TIME 30 // seconds
-
-#define SIZEOF_ID_STRUCT (sizeof(struct ndpi_id_struct))
-#define SIZEOF_FLOW_STRUCT (sizeof(struct ndpi_flow_struct))
-
-
-#define __FLOW_TRACKING 1
-
 #define IPV6_ADDR_LEN 16
 
 union ipv4_5tuple_host {
@@ -86,103 +65,6 @@ struct ip_5tuple
 	uint16_t port_src;
 	uint8_t  proto;
 } __attribute__((__packed__));
-
-
-// flow tracking
-struct ndpi_flow_info
-{
-	uint32_t hash;
-	bool detection_completed;
-	u_int8_t ip_version;
-	u_int64_t last_seen;
-	u_int64_t bytes;
-	u_int32_t packets;
-	struct http
-	{
-		char *url;
-		uint8_t method;
-	} http;
-	struct ssl
-	{
-		char *client_certificate;
-	} ssl;
-	uint8_t l7_proto;
-	int seen_flows;
-#ifdef __FLOW_TRACKING
-	FlowTracker *flow_tracker;
-#endif
-	uint64_t expire;
-	bool cli2srv_direction;
-	bool block;
-	ndpi_flow_info(uint8_t ip_ver, uint64_t l_seen) :
-		hash(0),
-		detection_completed(false),
-		ip_version(ip_ver),
-		last_seen(l_seen),
-		bytes(0),
-		packets(0),
-		expire(0),
-		cli2srv_direction(true),
-		block(false)
-	{
-	}
-
-	ndpi_flow_info() :
-		hash(0),
-		detection_completed(false),
-		ip_version(0),
-		last_seen(0),
-		bytes(0),
-		packets(0),
-		expire(0),
-		cli2srv_direction(true),
-		block(false)
-	{
-	}
-
-	bool isIdle(uint64_t time)
-	{
-		return (expire < time);
-	}
-	
-	void free_mem()
-	{
-		if(flow_tracker)
-			delete flow_tracker;
-		if(http.url)
-			free(http.url);
-		if(ssl.client_certificate)
-			free(ssl.client_certificate);
-	}
-};
-
-class flowHash
-{
-private:
-	Poco::Logger& _logger;
-	struct rte_hash *ipv4_FlowHash;
-	struct rte_hash *ipv6_FlowHash;
-	int _flowHashSize;
-public:
-	flowHash(int socket_id, int thread_id, int flowHashSize=FLOW_HASH_ENTRIES);
-	~flowHash();
-	inline struct rte_hash *getIPv4Hash()
-	{
-		return ipv4_FlowHash;
-	}
-	inline struct rte_hash *getIPv6Hash()
-	{
-		return ipv6_FlowHash;
-	}
-
-/*	void makeIPv4Key(struct ipv4_hdr *ipv4_hdr, struct ipv4_5tuple *key);
-	void makeIPv6Key(struct ipv6_hdr *ipv6_hdr, struct ipv6_5tuple *key);
-	void makeIPKey(Poco::Net::IPAddress &src_ip, Poco::Net::IPAddress &dst_ip, uint16_t src_port, uint16_t dst_port, uint8_t protocol, struct ip_5tuple *key);*/
-	inline int getHashSize()
-	{
-		return _flowHashSize;
-	}
-};
 
 static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len, uint32_t init_val)
 {

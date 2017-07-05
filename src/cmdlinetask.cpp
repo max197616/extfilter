@@ -364,10 +364,12 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "    domains: %" PRIu64 "\n", stats.redirected_domains);
 	cmdline_printf(cl, "    URLs: %" PRIu64 "\n",stats.redirected_urls);
 	cmdline_printf(cl, "  Sended rst: %" PRIu64 "\n",stats.sended_rst);
+	cmdline_printf(cl, "  Maximum active flows:\n");
+	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.max_ipv4_flows);
+	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.max_ipv6_flows);
 	cmdline_printf(cl, "  Active flows: %" PRIu64 "\n", stats.ndpi_flows_count);
 	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.ndpi_ipv4_flows_count);
 	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.ndpi_ipv6_flows_count);
-	cmdline_printf(cl, "  Deleted flows: %" PRIu64 "\n", stats.ndpi_flows_deleted);
 	cmdline_printf(cl, "  Reassembled flows: %" PRIu64 "\n", stats.reassembled_flows);
 }
 

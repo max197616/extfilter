@@ -2,10 +2,12 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.70, max1976@mail.ru)
+AC_INIT(extFilter, 0.80, max1976@mail.ru)
 
 DPDK_HOME=
 DPDK_TARGET=
+
+PEAFOWL_HOME=./peafowl
 
 AM_INIT_AUTOMAKE()
 
@@ -47,7 +49,7 @@ AC_MSG_CHECKING([for debug enabled])
 if test x"$debug" = x"true"; then
     CXXFLAGS="$CXXFLAGS -std=c++11 -O0 -g -Wall -pthread -msse -msse2 -msse3 -mssse3"
 else
-    CXXFLAGS="$CXXFLAGS -std=c++11 -O3 -Wall -pthread -msse -msse2 -msse3 -mssse3"
+    CXXFLAGS="$CXXFLAGS -std=c++11 -O3 -Wall -fno-stack-protector -pthread -msse -msse2 -msse3 -mssse3"
 fi
 
 AC_COMPILE_IFELSE([AC_LANG_SOURCE(
@@ -160,6 +162,38 @@ fi
 AC_SUBST(DPDK_LIB,$DPDK_HOME/$DPDK_TARGET/lib)
 AC_SUBST(DPDK_INCLUDE,$DPDK_HOME/$DPDK_TARGET/include)
 
-AC_CHECK_LIB([boost_regex], [main], , AC_MSG_ERROR([boost_regex library not found.]))
+dnl peafowl checks...
+AC_MSG_CHECKING(for peafowl $PEAFOWL_HOME)
+if test -d "$PEAFOWL_HOME" ; then :
+    AC_MSG_RESULT(found in $PEAFOWL_HOME)
+else
+    AC_MSG_RESULT(not found)
+    AC_MSG_NOTICE(Getting peafowl from git)
+    git clone https://github.com/max197616/Peafowl.git $PEAFOWL_HOME
+    AC_MSG_CHECKING(for peafowl $PEAFOWL_HOME)
+    if test -d "$PEAFOWL_HOME" ; then :
+	AC_MSG_RESULT(found in $PEAFOWL_HOME)
+    else
+	AC_MSG_ERROR(Install peafowl manually)
+    fi
+fi
+
+PEAFOWL_LIB=$PEAFOWL_HOME/lib/libdpi.a
+AC_MSG_CHECKING(for $PEAFOWL_LIB)
+if test -f "$PEAFOWL_LIB" ; then :
+
+else
+    AC_MSG_RESULT([not found, compiling...])
+    cd $PEAFOWL_HOME; make; cd -
+    if test -f "$PEAFOWL_LIB" ; then :
+	
+    else
+	AC_MSG_ERROR([Peafowl library not found!])
+    fi
+fi
+AC_MSG_RESULT(yes)
+
+AC_SUBST(PEAFOWL_INCLUDE, $PEAFOWL_HOME/src)
+AC_SUBST(PEAFOWL_LIB, $PEAFOWL_LIB)
 
 AC_OUTPUT(Makefile src/Makefile include/Makefile)

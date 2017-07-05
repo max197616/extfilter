@@ -9,24 +9,21 @@
 #include <Poco/HashMap.h>
 #include <Poco/Logger.h>
 #include <rte_hash.h>
+#include <api.h>
 #include "dtypes.h"
 #include "AhoCorasickPlus.h"
 #include "flow.h"
 #include "stats.h"
 #include "dpdk.h"
 
-
-#define EXTF_GC_INTERVAL	1000 // us
-#define EXTF_GC_BUDGET		128 // entries per EXTF_GC_INTERVAL
-#define EXTF_ALL_GC_INTERVAL 1 // seconds
-
-
-#define MAX_IDLE_TIME           30000 // msec
+#define SIZE_IPv4_FLOW_TABLE 32767
+#define SIZE_IPv6_FLOW_TABLE 32767
 
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
 
 #define URI_RESERVATION_SIZE 4096
+#define CERT_RESERVATION_SIZE 1024
 
 /* Configure how many packets ahead to prefetch, when reading packets */
 #define PREFETCH_OFFSET 3
@@ -86,20 +83,16 @@ private:
 
 	uint64_t last_time;
 
-	flowHash *m_FlowHash;
-
-	struct ndpi_flow_info **ipv4_flows;
-	struct ndpi_flow_info **ipv6_flows;
-
-	struct rte_mempool *flows_pool;
+	dpi_library_state_t *dpi_state;
 
 	std::string uri;
+	std::string certificate;
 
-	bool analyzePacket(struct rte_mbuf* mBuf);
-	bool analyzePacketFlow(struct rte_mbuf *m, uint64_t timestamp);
+	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
 	std::string _name;
+	
 public:
-	WorkerThread(const std::string& name, WorkerConfig &workerConfig, flowHash *fh, int socketid);
+	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid);
 
 	~WorkerThread();
 
@@ -111,10 +104,7 @@ public:
 		m_Stop = true;
 	}
 
-	const ThreadStats& getStats()
-	{
-		return m_ThreadStats;
-	}
+	const ThreadStats& getStats();
 
 	WorkerConfig& getConfig()
 	{
@@ -135,7 +125,5 @@ public:
 	{
 		m_ThreadStats.clear();
 	}
-
-	ndpi_flow_info *getFlow(uint8_t *ip_header, int ip_version, uint64_t timestamp, int32_t *idx, uint32_t sig);
 };
 

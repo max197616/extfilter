@@ -26,6 +26,7 @@
 #include <rte_config.h>
 #include <rte_common.h>
 #include <rte_ethdev.h>
+#include <rte_cycles.h>
 #include <sys/time.h>
 
 #include "statistictask.h"
@@ -85,6 +86,22 @@ static std::string formatPackets(float numPkts)
 		snprintf(buf, buf_len, "%.2f M", numPkts);
 	}
 	return std::string(buf);
+}
+
+static double hz = 0;
+
+/* Convert cycles to ns */
+static inline double
+cycles_to_ns(uint64_t cycles)
+{
+	if(hz == 0)
+		hz = rte_get_timer_hz();
+
+	double t = cycles;
+
+	t *= (double)NS_PER_S;
+	t /= hz;
+	return t;
 }
 
 void StatisticTask::OutStatistic()
@@ -177,7 +194,9 @@ void StatisticTask::OutStatistic()
 			app.logger().information("Thread IPv4 fragments: %" PRIu64 ", IPv6 fragments: %" PRIu64 ", IPv4 short packets: %" PRIu64, stats.ipv4_fragments, stats.ipv6_fragments, stats.ipv4_short_packets);
 			app.logger().information("Thread matched by ip/port: %" PRIu64 ", matched by ssl: %" PRIu64 ", matched by ssl/ip: %" PRIu64 ", matched by domain: %" PRIu64 ", matched by url: %" PRIu64, stats.matched_ip_port, stats.matched_ssl, stats.matched_ssl_ip, stats.matched_domains, stats.matched_urls);
 			app.logger().information("Thread redirected domains: %" PRIu64 ", redirected urls: %" PRIu64 ", rst sended: %" PRIu64, stats.redirected_domains,stats.redirected_urls,stats.sended_rst);
-			app.logger().information("Thread active flows: %" PRIu64 " (IPv4 flows: %" PRIu64 " IPv6 flows: %" PRIu64 "), expired flows: %" PRIu64 ", already detected blocked: %" PRIu64, stats.ndpi_flows_count, stats.ndpi_ipv4_flows_count, stats.ndpi_ipv6_flows_count, stats.ndpi_flows_deleted, stats.already_detected_blocked);
+			app.logger().information("Thread active flows: %" PRIu64 " (IPv4 flows: %" PRIu64 ", IPv6 flows: %" PRIu64 "), already detected blocked: %" PRIu64, stats.ndpi_flows_count, stats.ndpi_ipv4_flows_count, stats.ndpi_ipv6_flows_count, stats.already_detected_blocked);
+			if(stats.latency_counters.blocked_pkts != 0 && stats.latency_counters.total_pkts != 0)
+				app.logger().information("Thread packets latency all packets: %" PRIu64 " cycles (%.0f ns), blocked packets: %" PRIu64 " (%.0f ns)", (stats.latency_counters.total_cycles / stats.latency_counters.total_pkts), cycles_to_ns(stats.latency_counters.total_cycles / stats.latency_counters.total_pkts),  (stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts), cycles_to_ns(stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts));
 			if(!_statisticsFile.empty())
 			{
 				std::string worker_name("worker.core."+std::to_string(core));
@@ -192,7 +211,6 @@ void StatisticTask::OutStatistic()
 				os << worker_name << ".matched_domains=" << stats.matched_domains << std::endl;
 				os << worker_name << ".matched_ulrs=" << stats.matched_urls << std::endl;
 				os << worker_name << ".active_flows=" << stats.ndpi_flows_count << std::endl;
-				os << worker_name << ".expired_flows=" << stats.ndpi_flows_deleted << std::endl;
 				os << worker_name << ".ipv4_fragments=" << stats.ipv4_fragments << std::endl;
 				os << worker_name << ".ipv6_fragments=" << stats.ipv6_fragments << std::endl;
 				os << worker_name << ".ipv4_short_packets=" << stats.ipv4_short_packets << std::endl;
@@ -204,7 +222,7 @@ void StatisticTask::OutStatistic()
 	app.logger().information("All worker IPv4 fragments: %" PRIu64 ", IPv6 fragments: %" PRIu64 ", IPv4 short packets: %" PRIu64, ipv4_fragments, ipv6_fragments, ipv4_short_packets);
 	app.logger().information("All worker threads matched by ip/port: %" PRIu64 ", matched by ssl: %" PRIu64 ", matched by ssl/ip: %" PRIu64 ", matched by domain: %" PRIu64 ",  matched by url: %" PRIu64, matched_ip_port, matched_ssl, matched_ssl_ip, matched_domains, matched_urls);
 	app.logger().information("All worker threads redirected domains: %" PRIu64 ", redirected urls: %" PRIu64 ", rst sended: %" PRIu64, redirected_domains, redirected_urls, sended_rst);
-	app.logger().information("All worker threads active flows: %" PRIu64 "(IPv4 flows: %" PRIu64 " IPv6 flows: %" PRIu64 "), expired flows: %" PRIu64, active_flows, ndpi_ipv4_flows_count, ndpi_ipv6_flows_count, deleted_flows);
+	app.logger().information("All worker threads active flows: %" PRIu64 " (IPv4 flows: %" PRIu64 ", IPv6 flows: %" PRIu64 ")", active_flows, ndpi_ipv4_flows_count, ndpi_ipv6_flows_count);
 	if(!_statisticsFile.empty())
 	{
 		std::string worker_name("allworkers");
@@ -219,7 +237,6 @@ void StatisticTask::OutStatistic()
 		os << worker_name << ".matched_domains=" << matched_domains << std::endl;
 		os << worker_name << ".matched_ulrs=" << matched_urls << std::endl;
 		os << worker_name << ".active_flows=" << active_flows << std::endl;
-		os << worker_name << ".expired_flows=" << deleted_flows << std::endl;
 		os << worker_name << ".ipv4_fragments=" << ipv4_fragments << std::endl;
 		os << worker_name << ".ipv6_fragments=" << ipv6_fragments << std::endl;
 		os << worker_name << ".ipv4_short_packets=" << ipv4_short_packets << std::endl;
