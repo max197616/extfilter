@@ -116,7 +116,7 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $skip = 0;
 	foreach my $dm (keys %masked_domains)
 	{
-		if($domain_canonical =~ /\.$dm$/ || $domain_canonical =~ /^$dm$/)
+		if($domain_canonical =~ /\.\Q$dm\E$/ || $domain_canonical =~ /^\Q$dm\E$/)
 		{
 #			print "found mask $dm for domain $domain\n";
 			$skip++;
