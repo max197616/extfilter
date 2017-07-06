@@ -70,11 +70,11 @@ insmod /path/to/dpdk/build/kmod/igb_uio.ko
 
 - Подключаем сетевую карту к dpdk
 ```bash
-/path/to/dpdk/tools/dpdk-devbind.py --bind=igb_uio dev_pci_num
+/path/to/dpdk/usertools/dpdk-devbind.py --bind=igb_uio dev_pci_num
 ```
 Получить dev_pci_num можно при помощи команды:
 ```bash
-/path/to/dpdk/tools/dpdk-devbind.py --status
+/path/to/dpdk/usertools/dpdk-devbind.py --status
 ```
 
 
