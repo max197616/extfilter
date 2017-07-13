@@ -72,7 +72,7 @@ extFilter::extFilter(): _helpRequested(false),
 	}
 	for(int i=0; i < RTE_MAX_LCORE; i++)
 	{
-		memset(&_lcore_conf[i],sizeof(lcore_conf),0);
+		memset(&_lcore_conf[i], 0, sizeof(lcore_conf));
 	}
 	_instance = this;
 //	Poco::ErrorHandler::set(&_errorHandler);
