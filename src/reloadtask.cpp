@@ -44,6 +44,8 @@ ReloadTask::~ReloadTask()
 void ReloadTask::runTask()
 {
 	_logger.debug("Starting reload task...");
+	pthread_t tid = pthread_self();
+	pthread_setname_np(tid, name().c_str());
 	while (!isCancelled())
 	{
 		if(_event.tryWait(300))

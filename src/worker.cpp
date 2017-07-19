@@ -69,12 +69,7 @@ void header_cb(dpi_http_message_informations_t* m, dpi_pkt_infos_t* pkt_informat
 void ssl_cert_cb(char *certificate, int size, void *user_data)
 {
 	std::string *cert=(std::string *)user_data;
-	try {
-	cert->assign(certificate, size);
-	} catch (std::exception &ex)
-	{
-		std::cout << "Got exception for size " << size << std::endl;
-	}
+	cert->assign(certificate, size > 255 ? 255 : size);
 }
 
 WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid) :

@@ -136,7 +136,7 @@ while (my $ips = $sth->fetchrow_hashref())
 	{
 		next if(defined $ssl_hosts{$domain_canonical});
 		$ssl_hosts{$domain_canonical}=1;
-		print $SSL_HOST_FILE (length($domain_canonical) > 47 ? (substr($domain_canonical,0,47)."\n"): "$domain_canonical\n");
+		print $SSL_HOST_FILE (length($domain_canonical) > 255 ? (substr($domain_canonical,0,255)."\n"): "$domain_canonical\n");
 		my @ssl_ips=get_ips_for_record_id($ips->{record_id});
 		foreach my $ip (@ssl_ips)
 		{
@@ -214,7 +214,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		}
 		next if(defined $ssl_hosts{$host});
 		$ssl_hosts{$host}=1;
-		print $SSL_HOST_FILE (length($host) > 47 ? (substr($host,0,47)."\n"): "$host\n");
+		print $SSL_HOST_FILE (length($host) > 255 ? (substr($host, 0, 255)."\n"): "$host\n");
 		if($port ne "443")
 		{
 			$logger->info("Adding $port to https protocol");

@@ -228,13 +228,14 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
 //<---->portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
 
-	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
+/*	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
 	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
+*/
 
-//	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
+	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
 //	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_PROTO_MASK;
 
-//	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_TCP | ETH_RSS_UDP;
+	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_TCP | ETH_RSS_UDP;
 
 	portConf.txmode.mq_mode = ETH_MQ_TX_NONE;
 

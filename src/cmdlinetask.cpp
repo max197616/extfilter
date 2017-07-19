@@ -11,6 +11,7 @@
 #include <cmdline_parse_num.h>
 #include <poll.h>
 #include <rte_ethdev.h>
+#include <pthread.h>
 #include "notification.h"
 #include "main.h"
 #include <Poco/Net/NetException.h>
@@ -736,15 +737,16 @@ static void * cmdline_thread(void *arg)
 void CmdLineTask::runTask()
 {
 	_logger.debug("Running CmdLineTask...");
+	pthread_t tid = pthread_self();
+	pthread_setname_np(tid, name().c_str());
 	struct sockaddr_in cl_addr;
 	socklen_t socklen = sizeof(cl_addr);
 	struct cmdline *cl;
-	pthread_t tid;
 	struct pollfd fds[1];
 	int nfds = 1;
 	fds[0].events = POLLIN;
 	fds[0].fd = _sockfd;
-
+	int inst=0;
 	while(!isCancelled())
 	{
 		int res = poll(fds, nfds, 500);
@@ -776,7 +778,8 @@ void CmdLineTask::runTask()
 				_logger.fatal("Thread create failed");
 				throw Poco::Exception("Thread create failed");
 			}
-
+			std::string thread_name("CmdLineTaskWorker-"+std::to_string(++inst));
+			pthread_setname_np(tid, thread_name.c_str());
 			ret = pthread_detach(tid);
 			if (ret)
 			{

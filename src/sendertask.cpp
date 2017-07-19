@@ -24,7 +24,7 @@
 Poco::NotificationQueue SenderTask::queue;
 
 SenderTask::SenderTask(struct CSender::params &prm, int instance):
-	Task("SenderTask"),
+	Task("SenderTask-"+std::to_string(instance)),
 	sender(new CSender(prm)),
 	_logger(Poco::Logger::get("SenderTask"+std::to_string(instance)))
 {
@@ -40,7 +40,8 @@ SenderTask::~SenderTask()
 void SenderTask::runTask()
 {
 	_logger.debug("Starting SenderTask...");
-
+	pthread_t tid = pthread_self();
+	pthread_setname_np(tid, name().c_str());
 	while(!isCancelled())
 	{
 		Poco::Notification::Ptr pNf(queue.waitDequeueNotification());

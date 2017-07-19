@@ -28,7 +28,7 @@
 #include <rte_ethdev.h>
 #include <rte_cycles.h>
 #include <sys/time.h>
-
+#include <pthread.h>
 #include "statistictask.h"
 #include "stats.h"
 #include "worker.h"
@@ -258,6 +258,8 @@ void StatisticTask::runTask()
 {
 	Poco::Util::Application& app = Poco::Util::Application::instance();
 	app.logger().debug("Starting statistic task...");
+	pthread_t tid = pthread_self();
+	pthread_setname_np(tid, name().c_str());
 	if(!_statisticsFile.empty())
 	{
 		Poco::FileOutputStream os(_statisticsFile);
