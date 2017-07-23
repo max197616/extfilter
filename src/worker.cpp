@@ -33,9 +33,12 @@ void host_cb(dpi_http_message_informations_t* http_informations, const u_char* a
 	if(*flow_specific_user_data != NULL && data_length > 0)
 	{
 		struct dpi_flow_info *u = (struct dpi_flow_info *)*flow_specific_user_data;
-		u->host = (char *)calloc(1, data_length+1);
-		memcpy(u->host, app_data, data_length);
-		u->host_size = data_length;
+		if(u->host == NULL)
+		{
+			u->host = (char *)calloc(1, data_length+1);
+			memcpy(u->host, app_data, data_length);
+			u->host_size = data_length;
+		}
 	}
 }
 
