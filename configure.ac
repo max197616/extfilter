@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.80, max1976@mail.ru)
+AC_INIT(extFilter, 0.85, max1976@mail.ru)
 
 DPDK_HOME=
 DPDK_TARGET=
@@ -49,7 +49,7 @@ AC_MSG_CHECKING([for debug enabled])
 if test x"$debug" = x"true"; then
     CXXFLAGS="$CXXFLAGS -std=c++11 -O0 -g -Wall -pthread -msse -msse2 -msse3 -mssse3"
 else
-    CXXFLAGS="$CXXFLAGS -std=c++11 -O3 -Wall -fno-stack-protector -pthread -msse -msse2 -msse3 -mssse3"
+    CXXFLAGS="$CXXFLAGS -std=c++11 -O3 -Wall -fno-stack-protector -pthread -msse -msse2 -msse3 -mssse3 -march=native"
 fi
 
 AC_COMPILE_IFELSE([AC_LANG_SOURCE(

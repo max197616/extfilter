@@ -6,6 +6,7 @@
 #include <Poco/FileStream.h>
 #include <Poco/TaskManager.h>
 #include <Poco/StringTokenizer.h>
+#include <Poco/URI.h>
 #include <rte_config.h>
 #include <rte_malloc.h>
 #include <rte_cycles.h>
@@ -18,7 +19,6 @@
 #include <iomanip>
 #include "worker.h"
 #include "main.h"
-#include "dpi.h"
 #include <api.h>
 
 #include "AhoCorasickPlus.h"
@@ -28,6 +28,7 @@
 #include "acl.h"
 #include "cmdlinetask.h"
 #include "notification.h"
+#include "dpi.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -48,7 +49,10 @@ extFilter *extFilter::_instance = NULL;
 
 struct rte_mempool *extFilter::packet_info_pool[NB_SOCKETS];
 struct ether_addr extFilter::ports_eth_addr[RTE_MAX_ETHPORTS];
+uint8_t port_types[RTE_MAX_ETHPORTS];
 struct lcore_conf extFilter::_lcore_conf[RTE_MAX_LCORE];
+
+uint8_t sender_mac[6];
 
 void flow_delete_cb(void* flow_specific_user_data)
 {
@@ -190,12 +194,12 @@ static inline void em_parse_ptype(struct rte_mbuf *m)
 		pkt_info->keys.ipv6_key.xmm[0] = em_mask_key(data0, mask1.x);
 		pkt_info->keys.ipv6_key.xmm[1] = _mm_loadu_si128((__m128i *)(data1));
 		pkt_info->keys.ipv6_key.xmm[2] = em_mask_key(data2, mask2.x);
-//		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
+		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
 	} else if (tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV4))
 	{
 		void *ipv4_hdr = l3 + offsetof(struct ipv4_hdr, time_to_live);
 		pkt_info->keys.ipv4_key.xmm = em_mask_key(ipv4_hdr, mask0.x);
-//		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
+		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
 	}
 }
 
@@ -207,8 +211,82 @@ uint16_t cb_parse_ptype(uint8_t port __rte_unused, uint16_t queue __rte_unused, 
 	return nb_pkts;
 }
 
+int extFilter::initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_tx_queue)
+{
+	int retval;
+	struct rte_eth_conf portConf;
+	memset(&portConf,0,sizeof(rte_eth_conf));
+	portConf.rxmode.split_hdr_size = DPDK_CONFIG_SPLIT_HEADER_SIZE;
+	portConf.rxmode.header_split = DPDK_CONFIG_HEADER_SPLIT;
+	portConf.rxmode.hw_ip_checksum = DPDK_CONFIG_HW_IP_CHECKSUM;
+	portConf.rxmode.hw_vlan_filter = DPDK_CONFIG_HW_VLAN_FILTER;
+	portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME;
+	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
+	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
+	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
+	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
+	portConf.txmode.mq_mode = ETH_MQ_TX_NONE;
 
-int extFilter::initPort(uint8_t port, struct ether_addr *addr)
+	retval = rte_eth_dev_configure(port, 1, nb_tx_queue, &portConf);
+	if (retval != 0)
+		return retval;
+
+	struct rte_mempool *mpool = rte_pktmbuf_pool_create("Sender TX", 1000, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_eth_dev_socket_id(port));
+
+		logger().information("sender port=%d rx_queueid=%d nb_rxd=%d", (int) port, (int) 0, (int) _nb_rxd);
+		retval = rte_eth_rx_queue_setup(port, 0, _nb_rxd, rte_eth_dev_socket_id(port), NULL, mpool);
+		if (retval < 0)
+		{
+			logger().fatal("rte_eth_rx_queue_setup: err=%d (%s) port=%d", (int) retval, rte_strerror(-retval), (int)port);
+			return retval;
+		}
+
+
+	for(auto z=0; z < nb_tx_queue; z++)
+	{
+		logger().information("sender port=%d tx_queueid=%d tb_rxd=%d", (int) port, (int) z, (int) _nb_txd);
+		retval = rte_eth_tx_queue_setup(port, z, _nb_txd, rte_eth_dev_socket_id(port), NULL);
+		if (retval < 0)
+		{
+			logger().fatal("rte_eth_tx_queue_setup: err=%d (%s), port=%d, nb_tx_queue=%d, nb_txd=%d, socketid=%d", retval, rte_strerror(-retval), (int)port, (int)z, (int)_nb_txd, (int) rte_eth_dev_socket_id(port));
+			return retval;
+		}
+	}
+
+	rte_eth_macaddr_get(port, addr);
+	char buffer[100];
+	sprintf(buffer,"%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8, addr->addr_bytes[0], addr->addr_bytes[1], addr->addr_bytes[2], addr->addr_bytes[3],addr->addr_bytes[4], addr->addr_bytes[5]);
+	std::string mac_addr(buffer);
+	logger().information("Port %d MAC: %s", (int)port, mac_addr);
+
+	retval = rte_eth_dev_start(port);
+	if (retval < 0)
+		return retval;
+
+#define CHECK_INTERVAL 100 /* 100ms */
+#define MAX_CHECK_TIME 90  /* 9s (90 * 100ms) in total */
+	struct rte_eth_link link;
+
+	for (int count = 0; count <= MAX_CHECK_TIME; count++)
+	{
+		rte_eth_link_get_nowait(port, &link);
+		if(!link.link_status)
+		{
+			rte_delay_ms(CHECK_INTERVAL);
+		} else {
+			break;
+		}
+	}
+
+	if (!link.link_status)
+	{
+		logger().warning("Link down on port %d", (int) port);
+	}
+
+	return 0;
+}
+
+int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 {
 	int16_t queueid;
 	unsigned lcore_id;
@@ -284,7 +362,7 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 			}
 			queueid = qconf->rx_queue_list[queue].queue_id;
 
-			logger().debug("port=%d rx_queueid=%d nb_rxd=%d core=%d", (int) port, (int) queueid, (int) nb_rx_queue, (int) lcore_id);
+			logger().information("port=%d rx_queueid=%d nb_rxd=%d core=%d", (int) port, (int) queueid, (int) _nb_rxd, (int) lcore_id);
 			retval = rte_eth_rx_queue_setup(port, queueid, _nb_rxd, socketid, NULL, _pktmbuf_pool[socketid]);
 			if (retval < 0)
 			{
@@ -300,11 +378,12 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 		}
 		if (queueid == -1) {
 			// no rx_queue set, don't need to setup tx_queue for
-			// that clore
+			// that core
 			continue;
 		}
 //		retval = rte_eth_tx_queue_setup(port, q, TX_RING_SIZE, rte_eth_dev_socket_id(port), NULL);
 
+		logger().information("port=%d tx_queueid=%d nb_txd=%d core=%d", (int) port, (int) nb_tx_queue, (int) _nb_txd, (int) lcore_id);
 		retval = rte_eth_tx_queue_setup(port, nb_tx_queue, _nb_txd, socketid, NULL);
 		if (retval < 0)
 		{
@@ -345,7 +424,8 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr)
 	std::string mac_addr(buffer);
 	logger().information("Port %d MAC: %s", (int)port, mac_addr);
 
-	rte_eth_promiscuous_enable(port);
+	if(!no_promisc)
+		rte_eth_promiscuous_enable(port);
 
 
 	return 0;
@@ -539,7 +619,7 @@ void extFilter::initialize(Application& self)
 	ServerApplication::initialize(self);
 
 	_dpi_max_active_flows_ipv4 = config().getInt("dpi.max_active_flows_ipv4", 1000000);
-	_dpi_max_active_flows_ipv6 = config().getInt("dpi.max_active_flows_ipv6", 1000000);
+	_dpi_max_active_flows_ipv6 = config().getInt("dpi.max_active_flows_ipv6", 20000);
 	_dpi_fragmentation_ipv6_state = config().getBool("dpi.fragmentation_ipv6_state", true);
 	_dpi_fragmentation_ipv4_state = config().getBool("dpi.fragmentation_ipv4_state", true);
 	if(_dpi_fragmentation_ipv4_state)
@@ -551,7 +631,7 @@ void extFilter::initialize(Application& self)
 	_num_of_senders = config().getInt("num_of_senders", 1);
 	_lower_host = config().getBool("lower_host", false);
 	_match_url_exactly = config().getBool("match_url_exactly", false);
-	_block_undetected_ssl = config().getBool("block_undetected_ssl", false);
+	_block_ssl_no_sni = config().getBool("block_ssl_no_sni", false);
 	_http_redirect = config().getBool("http_redirect", true);
 	_url_normalization = config().getBool("url_normalization", true);
 	_remove_dot = config().getBool("remove_dot", true);
@@ -559,7 +639,7 @@ void extFilter::initialize(Application& self)
 	_urlsFile = config().getString("urllist","");
 	_domainsFile = config().getString("domainlist","");
 	_sslIpsFile = config().getString("sslips","");
-	if(!_block_undetected_ssl)
+	if(!_block_ssl_no_sni)
 	{
 		_sslIpsFile.assign("");
 	}
@@ -693,15 +773,10 @@ void extFilter::initialize(Application& self)
 	}
 
 	_nb_lcore_params=0;
+	int cnt_sender = 0;
 	for(uint32_t i=0; i < n_ports; i++)
 	{
 		std::string key("port "+std::to_string(i));
-		std::string p=config().getString(key+".queues", "");
-		if(p.empty())
-		{
-			logger().fatal("Port IDs are not sequential (port %d missing)", (int) i);
-			throw Poco::Exception("Congfiguration error");
-		}
 		_enabled_port_mask |= (1 << i);
 		std::string type = config().getString(key+".type", "");
 		uint8_t port_type = P_TYPE_SUBSCRIBER;
@@ -712,10 +787,45 @@ void extFilter::initialize(Application& self)
 				port_type = P_TYPE_NETWORK;
 			} else if (type == "subscriber")
 			{
+			} else if (type == "sender")
+			{
+				if(cnt_sender > 0)
+				{
+					logger().fatal("Too many sender ports");
+					throw Poco::Exception("Congfiguration error");
+				}
+				++cnt_sender;
+				port_type = P_TYPE_SENDER;
+				_dpdk_send_port = i;
 			} else {
 				logger().fatal("Unknown port type %s", type);
 				throw Poco::Exception("Congfiguration error");
 			}
+		}
+		port_types[i] = port_type;
+		if(port_type == P_TYPE_SENDER)
+		{
+			std::string mac = config().getString(key+".mac","");
+			if(mac.empty())
+			{
+				logger().fatal("Destination mac address not found for port %d", (int)i);
+				throw Poco::Exception("Congfiguration error");
+				
+			}
+			int last = 0;
+			int rc = sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx%n", sender_mac + 0, sender_mac + 1, sender_mac + 2, sender_mac + 3, sender_mac + 4, sender_mac + 5, &last);
+			if(rc != 6 || mac.size() != last)
+			{
+				logger().fatal("Invalid mac address '%s' for port %d", mac, (int)i);
+				throw Poco::Exception("Congfiguration error");
+			}
+			continue;
+		}
+		std::string p=config().getString(key+".queues", "");
+		if(p.empty())
+		{
+			logger().fatal("Port IDs are not sequential (port %d missing)", (int) i);
+			throw Poco::Exception("Congfiguration error");
 		}
 		Poco::StringTokenizer restTokenizer(p, ";");
 		std::vector<int> lcores;
@@ -891,15 +1001,28 @@ int extFilter::main(const ArgVec& args)
 			return Poco::Util::Application::EXIT_CONFIG;
 		}
 
+		struct rte_mempool *_mp = nullptr;
+
 		std::vector<uint8_t> ports;
 		for (uint8_t portid = 0; portid < _nb_ports; portid++)
 		{
 			if ((_enabled_port_mask & (1 << portid)) == 0)
 				continue;
-			if(initPort(portid, &ports_eth_addr[portid]) != 0)
+			if(port_types[portid] == P_TYPE_SENDER)
 			{
-				logger().fatal("Cannot initialize port %d", (int) portid);
-				return Poco::Util::Application::EXIT_CONFIG;
+				if(initSenderPort(portid, &ports_eth_addr[portid], _nb_lcore_params) != 0)
+				{
+					logger().fatal("Cannot initialize port %d", (int) portid);
+					return Poco::Util::Application::EXIT_CONFIG;
+				}
+				
+				_mp = rte_pktmbuf_pool_create("SenderBuffer", 1000, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+			} else {
+				if(initPort(portid, &ports_eth_addr[portid]) != 0)
+				{
+					logger().fatal("Cannot initialize port %d", (int) portid);
+					return Poco::Util::Application::EXIT_CONFIG;
+				}
 			}
 			ports.push_back(portid);
 		}
@@ -907,12 +1030,22 @@ int extFilter::main(const ArgVec& args)
 		WorkerConfig workerConfigArr[RTE_MAX_LCORE];
 
 		Poco::TaskManager tm;
-		for(int i=1; i <= _num_of_senders; i++)
-			tm.start(new SenderTask(_sender_params,i));
+		if(_mp == nullptr)
+		{
+			for(int i=1; i <= _num_of_senders; i++)
+			{
+				tm.start(new SenderTask(new CSender(_sender_params), i));
+			}
+		}
 
 		NotifyManager *nm = new NotifyManager(20000, _notify_groups);
 		tm.start(nm);
 
+
+		int max_ipv4_flows_per_core = ceil((float)_dpi_max_active_flows_ipv4/(float)(_nb_lcore_params));
+		int max_ipv6_flows_per_core = ceil((float)_dpi_max_active_flows_ipv6/(float)(_nb_lcore_params));
+
+		uint16_t tx_queue_id = 0;
 		/* launch per-lcore init on every lcore */
 		RTE_LCORE_FOREACH(lcore_id)
 		{
@@ -922,16 +1055,14 @@ int extFilter::main(const ArgVec& args)
 				if(!_domainsFile.empty() && !_urlsFile.empty())
 				{
 					workerConfigArr[lcore_id].atm = new AhoCorasickPlus();
-					workerConfigArr[lcore_id].entriesData = new EntriesData();
-					loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[lcore_id].atm, workerConfigArr[lcore_id].entriesData);
+					loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[lcore_id].atm);
 					workerConfigArr[lcore_id].atm->finalize();
 				}
-				workerConfigArr[lcore_id].block_undetected_ssl = _block_undetected_ssl;
+				workerConfigArr[lcore_id].block_ssl_no_sni = _block_ssl_no_sni;
 				if(!_sslFile.empty())
 				{
 					workerConfigArr[lcore_id].atmSSLDomains = new AhoCorasickPlus();
-					workerConfigArr[lcore_id].SSLdomainsMatchType = new DomainsMatchType;
-					loadDomains(_sslFile, workerConfigArr[lcore_id].atmSSLDomains, workerConfigArr[lcore_id].SSLdomainsMatchType);
+					loadDomains(_sslFile, workerConfigArr[lcore_id].atmSSLDomains);
 					workerConfigArr[lcore_id].atmSSLDomains->finalize();
 				}
 				workerConfigArr[lcore_id].match_url_exactly = _match_url_exactly;
@@ -942,27 +1073,58 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].add_p_type = _add_p_type;
 				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
 				workerConfigArr[lcore_id].nm = nm;
+				workerConfigArr[lcore_id].atmLock = new Poco::FastMutex();
+				workerConfigArr[lcore_id].atmSSLDomainsLock = new Poco::FastMutex();
+				workerConfigArr[lcore_id].sender_port = _dpdk_send_port;
+				workerConfigArr[lcore_id].tx_queue_id = tx_queue_id;
 
-				dpi_library_state_t* dpi_state=dpi_init_stateful(SIZE_IPv4_FLOW_TABLE, SIZE_IPv6_FLOW_TABLE, _dpi_max_active_flows_ipv4, _dpi_max_active_flows_ipv6);
+				logger().information("Initializing dpi flow hash with ipv4 max flows %d, ipv6  max flows %d.", max_ipv4_flows_per_core, max_ipv6_flows_per_core);
+				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, max_ipv4_flows_per_core, max_ipv6_flows_per_core);
+
+//				dpi_library_state_t* dpi_state = dpi_init_stateful(ipv4_buckets, ipv6_buckets, _dpi_max_active_flows_ipv4, _dpi_max_active_flows_ipv6);
+				dpi_library_state_t* dpi_state = dpi_init_stateless();
+				dpi_set_max_trials(dpi_state, 1);
+				dpi_inspect_nothing(dpi_state);
+
+				dpi_protocol_t protocol;
+				protocol.l4prot = IPPROTO_TCP;
+				protocol.l7prot = DPI_PROTOCOL_TCP_HTTP;
+				dpi_set_protocol(dpi_state, protocol);
+
+				protocol.l7prot = DPI_PROTOCOL_TCP_SSL;
+				dpi_set_protocol(dpi_state, protocol);
+
+
 				dpi_set_flow_cleaner_callback(dpi_state, &flow_delete_cb);
 
 				if(!_dpi_tcp_reordering)
 					dpi_tcp_reordering_disable(dpi_state);
 				else
 					dpi_tcp_reordering_enable(dpi_state);
+
 				if(_dpi_fragmentation_ipv4_state)
 					dpi_ipv4_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv4_table_size);
 				else
 					dpi_ipv4_fragmentation_disable(dpi_state);
+
 				if(_dpi_fragmentation_ipv6_state)
 					dpi_ipv6_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv6_table_size);
 				else
 					dpi_ipv6_fragmentation_disable(dpi_state);
 
 
+
+
 				std::string workerName("WorkerThread-" + std::to_string(lcore_id));
 				logger().debug("Preparing thread '%s'", workerName);
-				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id));
+				ESender::nparams prms;
+				if(_mp != nullptr)
+				{
+					prms.params = _sender_params;
+					prms.mac = (uint8_t *)&ports_eth_addr[1];
+					prms.to_mac = &sender_mac[0];
+				}
+				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id), mFlowHash, prms, _mp);
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)
@@ -972,6 +1134,7 @@ int extFilter::main(const ArgVec& args)
 				}
 				_workerThreadVec.push_back(newWorker);
 				pthread_setname_np(lcore_config[lcore_id].thread_id, workerName.c_str());
+				tx_queue_id++;
 			}
 		}
 
@@ -1011,7 +1174,7 @@ int extFilter::main(const ArgVec& args)
 	return Poco::Util::Application::EXIT_OK;
 }
 
-void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm, EntriesData *ed)
+void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm)
 {
 	logger().debug("Loading domains from file %s",domains);
 	Poco::FileInputStream df(domains);
@@ -1029,15 +1192,18 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 				if(str[0] == '#' || str[0] == ';')
 					continue;
 				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = entry_id;
+				AhoCorasickPlus::PatternId patId = lineno;
 				std::size_t pos = str.find("*.");
 				bool exact_match=true;
 				std::string insert=str;
+				patId <<= 2;
 				if(pos != std::string::npos)
 				{
 					exact_match=false;
 					insert=str.substr(pos+2,str.length()-2);
 				}
+				patId |= exact_match;
+				patId |= E_TYPE_DOMAIN << 1;
 				status = dm_atm->addPattern(insert, patId);
 				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
 				{
@@ -1047,17 +1213,6 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 						continue;
 					} else {
 						logger().error("Failed to add '%s' from line %d from file %s",insert,lineno,domains);
-					}
-				} else {
-					entry_data e;
-					e.type = E_TYPE_DOMAIN;
-					e.match_exactly = exact_match;
-					e.lineno = lineno;
-					std::pair<EntriesData::Iterator,bool> res=ed->insert(EntriesData::ValueType(entry_id,e));
-					if(!res.second)
-					{
-						logger().fatal("Logic error: found duplicate in the EntriesData. Domain '%s' line %d from file '%s'", str, lineno, domains);
-						throw Poco::Exception("Logic error: found duplicate in the EntriesData.");
 					}
 				}
 			}
@@ -1082,13 +1237,31 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 				if(str[0] == '#' || str[0] == ';')
 					continue;
 				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = entry_id;
+				AhoCorasickPlus::PatternId patId = lineno;
+				if(_url_normalization)
+				{
+					std::string url = "http://" + str;
+					try
+					{
+						Poco::URI url_p(url);
+						url_p.normalize();
+						url.assign(url_p.toString());
+					} catch (Poco::SyntaxException &ex)
+					{
+						logger().error("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), url);
+					}
+					str.assign(url.c_str()+7, url.length()-7);
+				}
 /*				std::string url = str;
 				std::size_t http_pos = url.find("http://");
 				if(http_pos == std::string::npos || http_pos > 0)
 				{
 					url.insert(0,"http://");
 				}*/
+				patId <<= 2;
+				patId |= 0;
+				patId |= E_TYPE_URL << 1;
+
 				status = dm_atm->addPattern(str, patId);
 				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
 				{
@@ -1098,17 +1271,6 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 						continue;
 					} else {
 						logger().error("Failed to add '%s' from line %d from file %s",str,lineno,urls);
-					}
-				} else {
-					entry_data e;
-					e.type = E_TYPE_URL;
-					e.match_exactly = false;
-					e.lineno = lineno;
-					std::pair<EntriesData::Iterator,bool> res=ed->insert(EntriesData::ValueType(entry_id,e));
-					if(!res.second)
-					{
-						logger().fatal("Logic error: found duplicate in the EntriesData. URL '%s' line %d from file '%s'", str, lineno, urls);
-						throw Poco::Exception("Logic error: found duplicate in the EntriesData.");
 					}
 				}
 			}
@@ -1120,49 +1282,7 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 	logger().debug("Finish loading URLS");
 }
 
-void extFilter::loadURLs(std::string &fn, AhoCorasickPlus *dm_atm)
-{
-	logger().debug("Loading URLS from file %s",fn);
-	Poco::FileInputStream uf(fn);
-	if(uf.good())
-	{
-		int lineno=1;
-		while(!uf.eof())
-		{
-			std::string str;
-			getline(uf,str);
-			if(!str.empty())
-			{
-				if(str[0] == '#' || str[0] == ';')
-					continue;
-				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = lineno;
-				std::string url = str;
-				std::size_t http_pos = url.find("http://");
-				if(http_pos == std::string::npos || http_pos > 0)
-				{
-					url.insert(0,"http://");
-				}
-				status = dm_atm->addPattern(url, patId);
-				if (status!=AhoCorasickPlus::RETURNSTATUS_SUCCESS)
-				{
-					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
-					{
-						logger().warning("Pattern '%s' already present in the URL database from file %s",str,fn);
-					} else {
-						logger().error("Failed to add '%s' from line %d from file %s",str,lineno,fn);
-					}
-				}
-			}
-			lineno++;
-		}
-	} else
-		throw Poco::OpenFileException(fn);
-	uf.close();
-	logger().debug("Finish loading URLS");
-}
-
-void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm,DomainsMatchType *dm_map)
+void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm)
 {
 	logger().debug("Loading domains from file %s",fn);
 	Poco::FileInputStream df(fn);
@@ -1187,6 +1307,9 @@ void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm,DomainsMatc
 					exact_match=false;
 					insert=str.substr(pos+2,str.length()-2);
 				}
+				patId <<= 2;
+				patId |= exact_match;
+				patId |= E_TYPE_DOMAIN << 1;
 				status = dm_atm->addPattern(insert, patId);
 				if (status!=AhoCorasickPlus::RETURNSTATUS_SUCCESS)
 				{
@@ -1195,14 +1318,6 @@ void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm,DomainsMatc
 						logger().warning("Pattern '%s' already present in the database from file %s",insert,fn);
 					} else {
 						logger().error("Failed to add '%s' from line %d from file %s",insert,lineno,fn);
-					}
-				} else {
-					std::pair<DomainsMatchType::Iterator,bool> res=dm_map->insert(DomainsMatchType::ValueType(lineno,exact_match));
-					if(res.second)
-					{
-//						logger().debug("Inserted domain: '%s' from line %d from file %s",str,lineno,fn);
-					} else {
-						logger().debug("Updated domain: '%s' from line %d from file %s",str,lineno,fn);
 					}
 				}
 			}

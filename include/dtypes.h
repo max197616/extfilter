@@ -8,14 +8,15 @@
 
 enum entry_types
 {
-	E_TYPE_DOMAIN,
+	E_TYPE_DOMAIN=0,
 	E_TYPE_URL
 };
 
 enum port_types
 {
 	P_TYPE_SUBSCRIBER,
-	P_TYPE_NETWORK
+	P_TYPE_NETWORK,
+	P_TYPE_SENDER
 };
 
 struct entry_data

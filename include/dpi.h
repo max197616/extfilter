@@ -18,4 +18,3 @@ struct dpi_flow_info
 	}
 };
 
-dpi_identification_result_t dpi_stateful_identify_application_protocol_new(dpi_library_state_t* state, const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint32_t hash);

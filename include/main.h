@@ -17,6 +17,8 @@
 #define RTE_TEST_RX_DESC_DEFAULT 128
 #define RTE_TEST_TX_DESC_DEFAULT 512
 
+#define EXTF_MAX_PKT_BURST 32
+
 class AhoCorasickPlus;
 class Patricia;
 class ACL;
@@ -34,14 +36,21 @@ struct lcore_rx_queue {
 	uint8_t queue_id;
 } __rte_cache_aligned;
 
+struct mbuf_table
+{
+	uint16_t len;
+	struct rte_mbuf* m_table[EXTF_MAX_PKT_BURST];
+};
+
 struct lcore_conf {
 	uint16_t n_rx_queue;
 	struct lcore_rx_queue rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
-	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
 	struct rte_acl_ctx *cur_acx_ipv4, *new_acx_ipv4;
 	struct rte_acl_ctx *cur_acx_ipv6, *new_acx_ipv6;
-	// TODO add WorkerConfig???
-/*	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];*/
+	uint8_t sender_port;
+	uint16_t tx_queue;
+	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
+	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
 } __rte_cache_aligned;
 
 
@@ -66,17 +75,12 @@ public:
 	/**
 	    Load domains for blocking.
 	**/
-	void loadDomains(std::string &fn, AhoCorasickPlus *_dm_atm,DomainsMatchType *_dm_map);
-
-	/**
-	    Load URLs for blocking.
-	**/
-	void loadURLs(std::string &fn, AhoCorasickPlus *dm_atm);
+	void loadDomains(std::string &fn, AhoCorasickPlus *_dm_atm);
 
 	/**
 	    Load domains and urls into one database.
 	**/
-	void loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm, EntriesData *ed);
+	void loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm);
 
 	std::string &getSSLFile()
 	{
@@ -176,7 +180,8 @@ public:
 
 	static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 private:
-	int initPort(uint8_t port, struct ether_addr *addr);
+	int initPort(uint8_t port, struct ether_addr *addr, bool no_promisc = false);
+	int initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_tx_queue);
 	int initMemory(uint8_t nb_ports);
 	int initACL();
 
@@ -199,7 +204,7 @@ private:
 
 	bool _lower_host;
 	bool _match_url_exactly;
-	bool _block_undetected_ssl;
+	bool _block_ssl_no_sni;
 	bool _http_redirect;
 	bool _url_normalization;
 	bool _remove_dot;
@@ -243,6 +248,7 @@ private:
 	std::string _notify_acl_file;
 	int _cmdline_port;
 	Poco::Net::IPAddress _cmdline_ip;
+	uint8_t _dpdk_send_port;
 };
 
 

@@ -186,21 +186,43 @@ private:
 	bool _is_rst;
 };
 
+struct redirectEvent
+{
+	uint16_t _user_port;
+	uint16_t _dst_port;
+	union
+	{
+		uint32_t ipv4;
+		__m128i ipv6;
+	} _user_ip;
+	union
+	{
+		uint32_t ipv4;
+		__m128i ipv6;
+	} _dst_ip;
+	uint8_t _ip_version;
+	uint32_t _acknum;
+	uint32_t _seqnum;
+	uint8_t _f_psh;
+	char *_additional_param;
+	uint8_t _is_rst;
+};
+
+
 
 /// Данная задача отсылает редирект заданному клиенту
 class SenderTask: public Poco::Task
 {
 public:
-	SenderTask(struct CSender::params &prm, int instance);
+	SenderTask(BSender *snd, int instance);
 	~SenderTask();
 
 	void runTask();
 
 	// очередь, куда необходимо писать отправные данные...
 	static Poco::NotificationQueue queue;
-
 private:
-	CSender *sender;
+	BSender *sender;
 	Poco::Logger& _logger;
 };
 

@@ -15,9 +15,12 @@
 #include "flow.h"
 #include "stats.h"
 #include "dpdk.h"
+#include "sender.h"
 
-#define SIZE_IPv4_FLOW_TABLE 32767
-#define SIZE_IPv6_FLOW_TABLE 32767
+#define EXTF_GC_INTERVAL	1000 // us
+#define EXTF_ALL_GC_INTERVAL 1 // seconds
+
+#define EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME 30 /** In seconds. **/
 
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
@@ -29,24 +32,24 @@
 #define PREFETCH_OFFSET 3
 
 class NotifyManager;
+class ESender;
 
 struct WorkerConfig
 {
 	uint32_t CoreId;
-	int port;
+
+	uint8_t port;
+
 	AhoCorasickPlus *atm;
-	Poco::FastMutex atmLock; // для загрузки url
+	Poco::FastMutex *atmLock; // для загрузки url
 	AhoCorasickPlus *atmSSLDomains;
-	DomainsMatchType *SSLdomainsMatchType;
-	Poco::FastMutex atmSSLDomainsLock; // для загрузки domains
+	Poco::FastMutex *atmSSLDomainsLock; // для загрузки domains
 
 	bool match_url_exactly;
 	bool lower_host;
-	bool block_undetected_ssl;
+	bool block_ssl_no_sni;
 	bool http_redirect;
 	enum ADD_P_TYPES add_p_type;
-
-	EntriesData *entriesData;
 
 	bool url_normalization;
 	bool remove_dot;
@@ -54,28 +57,33 @@ struct WorkerConfig
 	bool notify_enabled;
 	NotifyManager *nm;
 
+	uint8_t sender_port;
+	uint16_t tx_queue_id;
+
 	WorkerConfig()
 	{
 		CoreId = RTE_MAX_LCORE+1;
 		atm = NULL;
 		atmSSLDomains = NULL;
-		SSLdomainsMatchType = NULL;
 		match_url_exactly = false;
 		lower_host = false;
-		block_undetected_ssl = false;
+		block_ssl_no_sni = false;
 		http_redirect = true;
 		add_p_type = A_TYPE_NONE;
 		url_normalization = true;
 		remove_dot = true;
 		notify_enabled = false;
 		nm = nullptr;
+		atmLock = nullptr;
+		atmSSLDomainsLock = nullptr;
 	}
 };
 
 class WorkerThread : public DpdkWorkerThread
 {
+	friend class ESender;
 private:
-	WorkerConfig &m_WorkerConfig;
+	WorkerConfig m_WorkerConfig;
 	bool m_Stop;
 	Poco::Logger& _logger;
 	ThreadStats m_ThreadStats;
@@ -89,12 +97,47 @@ private:
 	std::string certificate;
 
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
+	ext_dpi_flow_info *getFlow(uint8_t *host_key, uint64_t timestamp, int32_t *idx, uint32_t sig, dpi_pkt_infos_t *pkt_infos);
+	dpi_identification_result_t getAppProtocol(uint8_t *host_key, uint64_t timestamp, uint32_t sig, dpi_pkt_infos_t *pkt_infos);
+	dpi_identification_result_t identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig);
+
+	bool checkSSL();
 	std::string _name;
-	
+	bool _need_block;
+	uint16_t _partition_id;
+
+	struct ext_dpi_flow_info **ipv4_flows;
+	struct ext_dpi_flow_info **ipv6_flows;
+
+	struct rte_mempool *flows_pool;
+
+	flowHash *m_FlowHash;
+	/// for sender through dpdk
+	int _n_send_pkts;
+	struct rte_mbuf* _sender_buf[EXTFILTER_WORKER_BURST_SIZE];
+	ESender *_snd;
 public:
-	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid);
+	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp);
 
 	~WorkerThread();
+
+	bool checkHTTP(std::string &uri, dpi_pkt_infos_t *pkt);
+	bool checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt);
+
+	inline std::string &getUri()
+	{
+		return uri;
+	}
+
+	inline std::string &getCert()
+	{
+		return certificate;
+	}
+
+	inline void setNeedBlock(bool b)
+	{
+		_need_block = b;
+	}
 
 	bool run(uint32_t coreId);
 

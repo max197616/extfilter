@@ -371,6 +371,8 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "  Active flows: %" PRIu64 "\n", stats.ndpi_flows_count);
 	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.ndpi_ipv4_flows_count);
 	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.ndpi_ipv6_flows_count);
+	cmdline_printf(cl, "  Flows deleted: %" PRIu64 "\n", stats.ndpi_flows_deleted);
+	cmdline_printf(cl, "  Flows expired: %" PRIu64 "\n", stats.ndpi_flows_expired);
 	cmdline_printf(cl, "  Reassembled flows: %" PRIu64 "\n", stats.reassembled_flows);
 }
 

@@ -12,8 +12,51 @@
 #include <Poco/Notification.h>
 #include <Poco/NotificationQueue.h>
 #include <Poco/Task.h>
+#include <api.h>
+
+//#define _SIMPLE_HASH 1
+
+extern "C" void dpi_reordering_tcp_delete_all_fragments(dpi_tracking_informations_t *victim);
 
 #define IPV6_ADDR_LEN 16
+
+struct ext_dpi_flow_info
+{
+	
+	u_int16_t srcport;
+	u_int16_t dstport;
+	u_int8_t l4prot;
+
+	union src_addr{ /** Addresses mantained in network byte order. **/
+		struct in6_addr ipv6_srcaddr;
+		u_int32_t ipv4_srcaddr;
+	} src_addr_t;
+	union dst_addr{
+		struct in6_addr ipv6_dstaddr;
+		u_int32_t ipv4_dstaddr;
+	} dst_addr_t;
+
+	dpi_flow_infos_t infos;
+	uint64_t last_timestamp;
+//	u_int64_t bytes;
+//	u_int32_t packets;
+
+	inline void free_mem(dpi_flow_cleaner_callback* flow_cleaner_callback)
+	{
+		if(flow_cleaner_callback != nullptr)
+			(*(flow_cleaner_callback))(infos.tracking.flow_specific_user_data);
+		if(infos.tracking.http_informations[0].temp_buffer != nullptr)
+			free(infos.tracking.http_informations[0].temp_buffer);
+		if(infos.tracking.http_informations[1].temp_buffer != nullptr)
+			free(infos.tracking.http_informations[1].temp_buffer);
+		if(infos.tracking.ssl_information[0].pkt_buffer != nullptr)
+			free(infos.tracking.ssl_information[0].pkt_buffer);
+		if(infos.tracking.ssl_information[1].pkt_buffer != nullptr)
+			free(infos.tracking.ssl_information[1].pkt_buffer);
+		dpi_reordering_tcp_delete_all_fragments(&(infos.tracking));
+	}
+};
+
 
 union ipv4_5tuple_host {
 	struct {
@@ -66,6 +109,29 @@ struct ip_5tuple
 	uint8_t  proto;
 } __attribute__((__packed__));
 
+
+#ifdef __SIMPLE_HASH
+static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len, uint32_t init_val)
+{
+	const union ipv4_5tuple_host *in = (const union ipv4_5tuple_host *)data;
+	return in->port_src+in->port_dst+in->ip_src+in->ip_dst+in->proto+init_val;
+}
+
+
+static inline uint32_t ipv6_hash_crc(const void *data, __rte_unused uint32_t data_len, uint32_t init_val)
+{
+	const union ipv6_5tuple_host *in = (const union ipv6_5tuple_host *)data;
+	u_int8_t i;
+	u_int32_t partsrc = 0, partdst = 0;
+	for(i=0; i< 16; i++){
+		partsrc += in->ip_src[i];
+		partdst += in->ip_dst[i];
+	}
+	return in->port_src+in->port_dst+partsrc+partdst+in->proto+init_val;
+}
+
+#else
+
 static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len, uint32_t init_val)
 {
 	const union ipv4_5tuple_host *k;
@@ -112,6 +178,40 @@ static inline uint32_t ipv6_hash_crc(const void *data, __rte_unused uint32_t dat
 	init_val = rte_hash_crc_4byte(*p, init_val);
 	return init_val;
 }
+
+#endif
+
+/// rte_hash holder
+class flowHash
+{
+private:
+	Poco::Logger& _logger;
+	struct rte_hash *ipv4_FlowHash;
+	struct rte_hash *ipv6_FlowHash;
+	uint32_t _flowHashSizeIPv4;
+	uint32_t _flowHashSizeIPv6;
+public:
+	flowHash(int socket_id, int thread_id, uint32_t flowHashSizeIPv4, uint32_t flowHashSizeIPv6);
+	~flowHash();
+	inline struct rte_hash *getIPv4Hash()
+	{
+		return ipv4_FlowHash;
+	}
+	inline struct rte_hash *getIPv6Hash()
+	{
+		return ipv6_FlowHash;
+	}
+	inline uint32_t getHashSizeIPv4()
+	{
+		return _flowHashSizeIPv4;
+	}
+	inline uint32_t getHashSizeIPv6()
+	{
+		return _flowHashSizeIPv6;
+	}
+
+};
+
 
 #if defined(__SSE2__)
 static inline xmm_t

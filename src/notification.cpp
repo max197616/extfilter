@@ -99,7 +99,7 @@ void NotifyManager::runTask()
 				{
 					_logger.error("Unable to find sender for group with id %d", notify_group);
 				} else {
-					r->second->Redirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), pNotifyNf->additional_param());
+					r->second->Redirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), pNotifyNf->additional_param().c_str());
 //					struct redirect_params rp = r->second;
 //					std::string full_url("@HTTP/1.1 "+rp.code+"\r\nLocation: " + rp.redirect_url + pNotifyNf->additional_param() + "\r\nConnection: close\r\n");
 //					sender->Redirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), full_url);

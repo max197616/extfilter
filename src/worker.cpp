@@ -28,17 +28,24 @@
 
 #define tcphdr(x)	((struct tcphdr *)(x))
 
+inline u_int8_t ext_dpi_v6_addresses_equal(uint64_t *x, uint64_t *y)
+{
+	if(*x == *y && *(x+1) == *(y+1))
+		return 1;
+	return 0;
+}
+
 void host_cb(dpi_http_message_informations_t* http_informations, const u_char* app_data, u_int32_t data_length, dpi_pkt_infos_t* pkt, void** flow_specific_user_data, void* user_data)
 {
-	if(*flow_specific_user_data != NULL && data_length > 0)
+	if(*flow_specific_user_data != NULL && data_length > 0 && (http_informations->method_or_code == DPI_HTTP_POST || http_informations->method_or_code == DPI_HTTP_GET || http_informations->method_or_code == DPI_HTTP_HEAD))
 	{
 		struct dpi_flow_info *u = (struct dpi_flow_info *)*flow_specific_user_data;
-		if(u->host == NULL)
-		{
-			u->host = (char *)calloc(1, data_length+1);
-			memcpy(u->host, app_data, data_length);
-			u->host_size = data_length;
-		}
+		WorkerThread *obj = (WorkerThread *) user_data;
+		std::string &uri = obj->getUri();
+		uri.assign("http://", 7);
+		uri.append((char *)app_data, data_length);
+		uri.append(u->url, u->url_size);
+		obj->setNeedBlock(obj->checkHTTP(uri, pkt));
 	}
 }
 
@@ -54,63 +61,484 @@ void url_cb(const unsigned char* url, u_int32_t url_length, dpi_pkt_infos_t* pkt
 	}
 }
 
-void header_cb(dpi_http_message_informations_t* m, dpi_pkt_infos_t* pkt_informations, void** flow_specific_user_data, void* user_data)
+void ssl_cert_cb(char *certificate, int size, void *user_data, dpi_pkt_infos_t *pkt)
 {
-	if(user_data != NULL && *flow_specific_user_data != NULL && (m->method_or_code == DPI_HTTP_GET || m->method_or_code == DPI_HTTP_PUT || m->method_or_code == DPI_HTTP_HEAD))
-	{
-		struct dpi_flow_info *u = (struct dpi_flow_info *)*flow_specific_user_data;
-		if(u->url != NULL && u->host != NULL)
-		{
-			std::string *uri = (std::string *)user_data;
-			uri->assign("http://");
-			uri->append(u->host, u->host_size);
-			uri->append(u->url, u->url_size);
-		}
-	}
+	WorkerThread *obj = (WorkerThread *) user_data;
+	std::string &cert = obj->getCert();
+	cert.assign(certificate, size > 255 ? 255 : size);
+	obj->setNeedBlock(obj->checkSSL(cert, pkt));
 }
 
-void ssl_cert_cb(char *certificate, int size, void *user_data)
-{
-	std::string *cert=(std::string *)user_data;
-	cert->assign(certificate, size > 255 ? 255 : size);
-}
-
-WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid) :
+WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp) :
 		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
 		dpi_state(state),
-		_name(name)
+		_name(name),
+		m_FlowHash(fh),
+		_n_send_pkts(0)
 {
 	uri.reserve(URI_RESERVATION_SIZE);
 	certificate.reserve(CERT_RESERVATION_SIZE);
+
+	// setup peafowl
 	static dpi_http_header_field_callback* single_cb[1]={&host_cb};
 	static const char* headers[1]={"host"};
-
-	static dpi_http_callbacks_t callback={.header_url_callback = url_cb, .header_names = headers, .num_header_types = 1, .header_types_callbacks = single_cb, .header_completion_callback = header_cb, .http_body_callback = 0};
-	dpi_http_activate_callbacks(dpi_state, &callback, &uri);
+	static dpi_http_callbacks_t callback={.header_url_callback = url_cb, .header_names = headers, .num_header_types = 1, .header_types_callbacks = single_cb, .header_completion_callback = 0, .http_body_callback = 0};
+	dpi_http_activate_callbacks(dpi_state, &callback, this);
 	static dpi_ssl_callbacks_t ssl_callback = {.certificate_callback = ssl_cert_cb };
-	dpi_ssl_activate_callbacks(state, &ssl_callback, &certificate);
+	dpi_ssl_activate_callbacks(state, &ssl_callback, this);
+
+	// setup hash
+	std::string mem_name("IPv4Flows_"+name);
+	ipv4_flows = (struct ext_dpi_flow_info **)rte_zmalloc_socket(mem_name.c_str(), fh->getHashSizeIPv4()*sizeof(struct ext_dpi_flow_info *), RTE_CACHE_LINE_SIZE, socketid);
+	if(ipv4_flows == nullptr)
+	{
+		_logger.fatal("Not enough memory for ipv4 flows");
+		throw Poco::Exception("Not enough memory for ipv4 flows");
+	}
+	mem_name.assign("IPv6Flows_"+name);
+	ipv6_flows = (struct ext_dpi_flow_info **)rte_zmalloc_socket(mem_name.c_str(), fh->getHashSizeIPv6()*sizeof(struct ext_dpi_flow_info *), RTE_CACHE_LINE_SIZE, socketid);
+	if(ipv6_flows == nullptr)
+	{
+		_logger.fatal("Not enough memory for ipv6 flows");
+		throw Poco::Exception("Not enough memory for ipv6 flows");
+	}
+	_logger.debug("Allocating %d bytes for flow pool", (int) ((fh->getHashSizeIPv4() + fh->getHashSizeIPv6())*sizeof(struct ext_dpi_flow_info)));
+	std::string mempool_name("flows_pool_" + name);
+	flows_pool = rte_mempool_create(mempool_name.c_str(), (fh->getHashSizeIPv4() + fh->getHashSizeIPv6()), sizeof(struct ext_dpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, socketid, 0);
+	if(flows_pool == nullptr)
+	{
+		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes", (int) ((fh->getHashSizeIPv4() + fh->getHashSizeIPv6())*sizeof(struct ext_dpi_flow_info)));
+		throw Poco::Exception("Not enough memory for flows pool");
+	}
+	if(mp != nullptr)
+	{
+		// setup sender
+		_snd = new ESender(sp, m_WorkerConfig.sender_port, mp, this);
+	} else {
+		_snd = nullptr;
+	}
 }
 
 WorkerThread::~WorkerThread()
 {
 	dpi_terminate(dpi_state);
+	delete m_WorkerConfig.atmLock;
+	delete m_WorkerConfig.atmSSLDomainsLock;
+	if(_snd != nullptr)
+		delete _snd;
 }
 
 const ThreadStats& WorkerThread::getStats()
 {
-	struct flow_table_stat stat;
-	get_flow_stat_v4(dpi_state->db4, &stat);
-	m_ThreadStats.ndpi_flows_count = stat.active_flows;
-	m_ThreadStats.ndpi_ipv4_flows_count = stat.active_flows;
-	m_ThreadStats.max_ipv4_flows = stat.max_active_flows;
-	get_flow_stat_v6(dpi_state->db6, &stat);
-	m_ThreadStats.ndpi_ipv6_flows_count = stat.active_flows;
-	m_ThreadStats.max_ipv6_flows = stat.max_active_flows;
-	m_ThreadStats.ndpi_flows_count += stat.active_flows;
 	return m_ThreadStats;
 }
 
+bool WorkerThread::checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt)
+{
+	struct ipv4_hdr *ipv4_header = (struct ipv4_hdr *) pkt->pkt;
+	struct ipv6_hdr *ipv6_header = (struct ipv6_hdr *) pkt->pkt;
+	struct tcphdr* tcph;
+	tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
+
+	if(m_WorkerConfig.atmSSLDomains != nullptr)
+	{
+		if(!m_WorkerConfig.atmSSLDomainsLock->tryLock())
+			return false;
+		if(m_WorkerConfig.lower_host)
+			std::transform(certificate.begin(), certificate.end(), certificate.begin(), ::tolower);
+		AhoCorasickPlus::Match match;
+		std::size_t host_len=certificate.length();
+		bool found=false;
+		m_WorkerConfig.atmSSLDomains->search(certificate, false);
+		while(m_WorkerConfig.atmSSLDomains->findNext(match) && !found)
+		{
+			if(match.pattern.ptext.length != host_len)
+			{
+				bool exact_match=match.id & 0x01;
+				if(exact_match)
+					continue;
+				if(certificate[host_len-match.pattern.ptext.length-1] != '.')
+					continue;
+			}
+			found=true;
+		}
+		m_WorkerConfig.atmSSLDomainsLock->unlock();
+		if(found)
+		{
+			m_ThreadStats.matched_ssl++;
+			if(likely(_snd != nullptr))
+			{
+				_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
+			} else {
+				SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+			}
+			m_ThreadStats.sended_rst++;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool WorkerThread::checkHTTP(std::string &uri, dpi_pkt_infos_t *pkt)
+{
+	struct ipv4_hdr *ipv4_header = (struct ipv4_hdr *) pkt->pkt;
+	struct ipv6_hdr *ipv6_header = (struct ipv6_hdr *) pkt->pkt;
+	struct tcphdr* tcph;
+	tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
+	if(m_WorkerConfig.atm != nullptr)
+	{
+		if(m_WorkerConfig.atmLock->tryLock())
+		{
+			if(m_WorkerConfig.url_normalization)
+			{
+				try
+				{
+					Poco::URI uri_p(uri);
+					uri_p.normalize();
+					uri.assign(uri_p.toString());
+				} catch (Poco::SyntaxException &ex)
+				{
+					_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
+				}
+			}
+			if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
+			{
+				// remove dot after domain...
+				size_t f_slash_pos=uri.find('/',10);
+				if(!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host && f_slash_pos != std::string::npos)
+				{
+					std::transform(uri.begin()+7, uri.begin()+f_slash_pos, uri.begin()+7, ::tolower);
+				}
+				if(m_WorkerConfig.remove_dot && f_slash_pos != std::string::npos)
+				{
+					if(uri[f_slash_pos-1] == '.')
+						uri.erase(f_slash_pos-1,1);
+				}
+			}
+			AhoCorasickPlus::Match match;
+			bool found=false;
+			size_t uri_length=uri.length() - 7;
+			char const *uri_ptr=uri.c_str() + 7;
+			m_WorkerConfig.atm->search((char *)uri_ptr, uri_length, false);
+			while(m_WorkerConfig.atm->findNext(match) && !found)
+			{
+				if(match.pattern.ptext.length != uri_length)
+				{
+					int r=match.position-match.pattern.ptext.length;
+					if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN)
+					{
+						if(r > 0)
+						{
+							if(match.id & 0x01)
+								continue;
+							if(*(uri_ptr+r-1) != '.')
+								continue;
+						}
+					} else if(((match.id & 0x02) >> 1) == E_TYPE_URL)
+					{
+						if(m_WorkerConfig.match_url_exactly)
+							continue;
+						if(r > 0)
+						{
+							if(*(uri_ptr+r-1) != '.')
+								continue;
+						}
+					}
+				}
+				found=true;
+			}
+			m_WorkerConfig.atmLock->unlock();
+			if(found)
+			{
+				if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN) // block by domain...
+				{
+					m_ThreadStats.matched_domains++;
+					if(m_WorkerConfig.http_redirect)
+					{
+						std::string add_param;
+						switch (m_WorkerConfig.add_p_type)
+						{
+							case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
+								break;
+							case A_TYPE_URL: add_param="url="+uri;
+								break;
+							default: break;
+						}
+						if(likely(_snd != nullptr))
+						{
+							_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
+						} else {
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
+						}
+						m_ThreadStats.redirected_domains++;
+					} else {
+						if(likely(_snd != nullptr))
+						{
+							_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
+						} else {
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+						}
+						m_ThreadStats.sended_rst++;
+					}
+					return true;
+				} else if(((match.id & 0x02) >> 1) == E_TYPE_URL) // block by url...
+				{
+					m_ThreadStats.matched_urls++;
+					if(m_WorkerConfig.http_redirect)
+					{
+						std::string add_param;
+						switch (m_WorkerConfig.add_p_type)
+						{
+							case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
+								break;
+							case A_TYPE_URL: add_param="url="+uri;
+								break;
+							default: break;
+						}
+						if(likely(_snd != nullptr))
+						{
+							_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
+						} else {
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
+						}
+						m_ThreadStats.redirected_urls++;
+					} else {
+						if(likely(_snd != nullptr))
+						{
+							_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
+						} else {
+							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+						}
+						m_ThreadStats.sended_rst++;
+					}
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+
+
+dpi_identification_result_t WorkerThread::identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig)
+{
+	dpi_identification_result_t r;
+	r.status = DPI_STATUS_OK;
+	dpi_pkt_infos_t infos = { 0 };
+	u_int8_t l3_status;
+
+	r.status = dpi_parse_L3_L4_headers(dpi_state, pkt, length, &infos, current_time);
+
+	if(unlikely(r.status==DPI_STATUS_IP_FRAGMENT || r.status<0))
+	{
+		return r;
+	}
+
+	if(infos.l4prot != IPPROTO_TCP && infos.l4prot != IPPROTO_UDP)
+	{
+		r.status=DPI_ERROR_TRANSPORT_PROTOCOL_NOTSUPPORTED;
+		return r;
+	}
+
+	l3_status = r.status;
+	r.status = DPI_STATUS_OK;
+	/**
+	 * We return the status of dpi_stateful_get_app_protocol call,
+	 * without giving informations on status returned
+	 * by dpi_parse_L3_L4_headers. Basically we return the status which
+	 * provides more informations.
+	 */
+	r = getAppProtocol(host_key, current_time, sig, &infos);
+
+	if(l3_status == DPI_STATUS_IP_LAST_FRAGMENT)
+	{
+		free((unsigned char*) infos.pkt);
+	}
+
+	return r;
+}
+
+
+
+dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint64_t timestamp, uint32_t sig, dpi_pkt_infos_t *pkt_infos)
+{
+	dpi_identification_result_t r;
+	r.status = DPI_STATUS_OK;
+
+	dpi_flow_infos_t* flow_infos=NULL;
+
+	int32_t hash_idx = 0;
+
+	ext_dpi_flow_info *fi = getFlow(host_key, timestamp, &hash_idx, sig, pkt_infos);
+
+	if(unlikely(fi==NULL))
+	{
+		r.status=DPI_ERROR_MAX_FLOWS;
+		return r;
+	}
+
+	flow_infos = &(fi->infos);
+
+	r = dpi_stateless_get_app_protocol(dpi_state, flow_infos, pkt_infos);
+
+	if(r.status == DPI_STATUS_TCP_CONNECTION_TERMINATED)
+	{
+		if(pkt_infos->ip_version == 4)
+		{
+			int32_t delr=rte_hash_del_key(m_FlowHash->getIPv4Hash(), host_key);
+			if(delr < 0)
+			{
+				_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
+			} else {
+				ipv4_flows[hash_idx]->free_mem(dpi_state->flow_cleaner_callback);
+				rte_mempool_put(flows_pool, ipv4_flows[hash_idx]);
+				ipv4_flows[hash_idx] = nullptr;
+				m_ThreadStats.ndpi_flows_count--;
+				m_ThreadStats.ndpi_ipv4_flows_count--;
+				m_ThreadStats.ndpi_flows_deleted++;
+			}
+		} else {
+			int32_t delr=rte_hash_del_key(m_FlowHash->getIPv6Hash(), host_key);
+			if(delr < 0)
+			{
+				_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
+			} else {
+				ipv6_flows[hash_idx]->free_mem(dpi_state->flow_cleaner_callback);
+				rte_mempool_put(flows_pool,ipv6_flows[hash_idx]);
+				ipv6_flows[hash_idx] = nullptr;
+				m_ThreadStats.ndpi_flows_count--;
+				m_ThreadStats.ndpi_ipv6_flows_count--;
+				m_ThreadStats.ndpi_flows_deleted++;
+			}
+		}
+	}
+	return r;
+}
+
+
+
+ext_dpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, uint64_t timestamp, int32_t *idx, uint32_t sig, dpi_pkt_infos_t *pkt_infos)
+{
+	if(pkt_infos->ip_version == 6)
+	{
+		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
+		if(ret >= 0)
+		{
+			*idx = ret;
+			if(ext_dpi_v6_addresses_equal((uint64_t *)&(ipv6_flows[ret]->src_addr_t.ipv6_srcaddr),(uint64_t *) &pkt_infos->src_addr_t.ipv6_srcaddr) && ipv6_flows[ret]->srcport == pkt_infos->srcport)
+				pkt_infos->direction=0;
+			else
+				pkt_infos->direction=1;
+			ipv6_flows[ret]->last_timestamp = timestamp;
+			return ipv6_flows[ret];
+		}
+		if(ret == -EINVAL)
+		{
+			_logger.error("Bad parameter in ipv6 hash lookup");
+			return NULL;
+		}
+		if(ret == -ENOENT)
+		{
+			struct ext_dpi_flow_info *newflow;
+			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
+			{
+				_logger.fatal("Not enough memory for the flow in the flows_pool");
+				return NULL;
+			}
+			memset(newflow, 0, sizeof(struct ext_dpi_flow_info));
+			newflow->last_timestamp = timestamp;
+			rte_memcpy(&newflow->src_addr_t.ipv6_srcaddr, &pkt_infos->src_addr_t.ipv6_srcaddr, IPV6_ADDR_LEN * 2);
+			newflow->srcport=pkt_infos->srcport;
+			newflow->dstport=pkt_infos->dstport;
+			newflow->l4prot=pkt_infos->l4prot;
+
+			dpi_init_flow_infos(dpi_state, &(newflow->infos), pkt_infos->l4prot);
+
+			pkt_infos->direction = 0;
+			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
+			if(ret == -EINVAL)
+			{
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("Bad parameters in hash add");
+				return NULL;
+			}
+			if(ret == -ENOSPC)
+			{
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("There is no space in the ipv6 flow hash");
+				return NULL;
+			}
+			ipv6_flows[ret] = newflow;
+			*idx = ret;
+			m_ThreadStats.ndpi_ipv6_flows_count++;
+			m_ThreadStats.ndpi_flows_count++;
+			return newflow;
+		}
+		return NULL;
+	}
+	if(pkt_infos->ip_version == 4)
+	{
+		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
+		if(ret >= 0)
+		{
+			*idx = ret;
+			if(ipv4_flows[ret]->src_addr_t.ipv4_srcaddr == pkt_infos->src_addr_t.ipv4_srcaddr && ipv4_flows[ret]->srcport == pkt_infos->srcport)
+				pkt_infos->direction=0;
+			else
+				pkt_infos->direction=1;
+			ipv4_flows[ret]->last_timestamp = timestamp;
+			return ipv4_flows[ret];
+		}
+		if(ret == -EINVAL)
+		{
+			_logger.error("Bad parameter in ipv4 hash lookup");
+			return NULL;
+		}
+		if(ret == -ENOENT)
+		{
+			struct ext_dpi_flow_info *newflow;
+			if(rte_mempool_get(flows_pool, (void **)&newflow) != 0)
+			{
+				_logger.fatal("Not enough memory for the flow in the flows_pool");
+				return NULL;
+			}
+			memset(newflow, 0, sizeof(struct ext_dpi_flow_info));
+			newflow->last_timestamp = timestamp;
+
+			newflow->src_addr_t.ipv4_srcaddr = pkt_infos->src_addr_t.ipv4_srcaddr;
+			newflow->dst_addr_t.ipv4_dstaddr = pkt_infos->dst_addr_t.ipv4_dstaddr;
+			newflow->srcport=pkt_infos->srcport;
+			newflow->dstport=pkt_infos->dstport;
+			newflow->l4prot=pkt_infos->l4prot;
+
+			dpi_init_flow_infos(dpi_state, &(newflow->infos), pkt_infos->l4prot);
+
+			pkt_infos->direction = 0;
+			ret = rte_hash_add_key_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
+			if(ret == -EINVAL)
+			{
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("Bad parameters in hash add");
+				return NULL;
+			}
+			if(ret == -ENOSPC)
+			{
+				rte_mempool_put(flows_pool,newflow);
+				_logger.fatal("There is no space in the ipv4 flow hash");
+				return NULL;
+			}
+			ipv4_flows[ret] = newflow;
+			*idx = ret;
+			m_ThreadStats.ndpi_ipv4_flows_count++;
+			m_ThreadStats.ndpi_flows_count++;
+			return newflow;
+		}
+		return NULL;
+	}
+	return NULL;
+}
 
 bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 {
@@ -121,6 +549,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	struct ipv6_hdr *ipv6_header=nullptr;
 	int size=rte_pktmbuf_pkt_len(m);
 
+	_need_block = false;
 	int ip_version=0;
 	uint32_t ip_len;
 	int iphlen=0;
@@ -205,11 +634,11 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	m_ThreadStats.analyzed_packets++;
 
-	int tcp_src_port=rte_be_to_cpu_16(tcph->source);
-	int tcp_dst_port=rte_be_to_cpu_16(tcph->dest);
+	uint16_t tcp_src_port = tcph->source;
+	uint16_t tcp_dst_port = tcph->dest;
 
 	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
-	if(acl_action == ACL::ACL_DROP)
+	if(payload_len > 0 && acl_action == ACL::ACL_DROP)
 	{
 		m_ThreadStats.matched_ip_port++;
 		SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
@@ -220,205 +649,31 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	dpi_identification_result_t r;
 	uri.clear();
-	certificate.clear();
-//	r = dpi_stateful_identify_application_protocol_new(dpi_state, l3, ip_len, timestamp, m->hash.usr);
-	r = dpi_stateful_identify_application_protocol_new(dpi_state, l3, ip_len, timestamp, m->hash.rss);
+
+	r = identifyAppProtocol(l3, ip_len, timestamp, (uint8_t *)&((struct packet_info *)m->userdata)->keys, m->hash.usr);
+
+	if(_need_block)
+		return true;
+
+	if(payload_len == 0)
+		return false;
 
 	if(r.protocol.l7prot == DPI_PROTOCOL_TCP_SSL)
 	{
-		if(m_WorkerConfig.atmSSLDomains)
+		if(m_WorkerConfig.block_ssl_no_sni)
 		{
-			if(!certificate.empty())
+			if(acl_action == ACL::ACL_SSL && payload_len > 0)
 			{
-				// если не можем выставить lock, то нет смысла продолжать...
-				if(!m_WorkerConfig.atmSSLDomainsLock.tryLock())
-					return false;
-				if(m_WorkerConfig.lower_host)
-					std::transform(certificate.begin(), certificate.end(), certificate.begin(), ::tolower);
-				AhoCorasickPlus::Match match;
-				std::size_t host_len=certificate.length();
-				bool found=false;
-				{
-					m_WorkerConfig.atmSSLDomains->search(certificate,false);
-					while(m_WorkerConfig.atmSSLDomains->findNext(match) && !found)
-					{
-						if(match.pattern.ptext.length != host_len)
-						{
-							DomainsMatchType::Iterator it=m_WorkerConfig.SSLdomainsMatchType->find(match.id);
-							bool exact_match=false;
-							if(it != m_WorkerConfig.SSLdomainsMatchType->end())
-								exact_match = it->second;
-							if(exact_match)
-								continue;
-							if(certificate[host_len-match.pattern.ptext.length-1] != '.')
-								continue;
-						}
-						found=true;
-					}
-				}
-				m_WorkerConfig.atmSSLDomainsLock.unlock();
-#ifdef DEBUG_TIME
-				sw.stop();
-				_logger.debug("SSL Host seek occupied %ld us, host: %s",sw.elapsed(),certificate);
-#endif
-				if(found)
-				{
-					m_ThreadStats.matched_ssl++;
-#ifdef _DEBUG_WORKER
-					_logger.debug("SSL host %s present in SSL domain (file line %u) list from ip %s:%d to ip %s:%d", certificate, match.id, src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-#endif
-					SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-					m_ThreadStats.sended_rst++;
-//					flow_info->block=true;
-					return true;
-				} else {
-					return false;
-				}
-			} else if(m_WorkerConfig.block_undetected_ssl)
-			{
-				if(acl_action == ACL::ACL_SSL)
-				{
-					m_ThreadStats.matched_ssl_ip++;
-#ifdef _DEBUG_WORKER
-					_logger.debug("Blocking/Marking SSL client hello packet from %s:%d to %s:%d", src_ip->toString(),tcp_src_port,dst_ip->toString(),tcp_dst_port);
-#endif
-					m_ThreadStats.sended_rst++;
-					SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-//					flow_info->block=true;
-					return true;
-				}
+				m_ThreadStats.matched_ssl_ip++;
+				m_ThreadStats.sended_rst++;
+				SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+				return true;
 			}
 		}
-		return false;
 	}
-
 
 	if(r.protocol.l7prot == DPI_PROTOCOL_TCP_HTTP && !uri.empty())
 	{
-		if(m_WorkerConfig.atm)
-		{
-			if(m_WorkerConfig.atmLock.tryLock())
-			{
-				std::string orig_uri(uri);
-				if(m_WorkerConfig.url_normalization)
-				{
-					try
-					{
-						Poco::URI uri_p(uri);
-						uri_p.normalize();
-						uri.assign(uri_p.toString());
-					} catch (Poco::SyntaxException &ex)
-					{
-						_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
-					}
-				}
-				if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
-				{
-					// remove dot after domain...
-					size_t f_slash_pos=uri.find('/',10);
-					if(!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host && f_slash_pos != std::string::npos)
-					{
-						std::transform(uri.begin()+7, uri.begin()+f_slash_pos, uri.begin()+7, ::tolower);
-					}
-					if(m_WorkerConfig.remove_dot && f_slash_pos != std::string::npos)
-					{
-						if(uri[f_slash_pos-1] == '.')
-							uri.erase(f_slash_pos-1,1);
-					}
-				}
-				AhoCorasickPlus::Match match;
-				bool found=false;
-				size_t uri_length=uri.length() - 7;
-				char const *uri_ptr=uri.c_str() + 7;
-				m_WorkerConfig.atm->search((char *)uri_ptr, uri_length, false); // skip http://
-				EntriesData::Iterator it;
-				while(m_WorkerConfig.atm->findNext(match) && !found)
-				{
-					it=m_WorkerConfig.entriesData->find(match.id);
-					if(match.pattern.ptext.length != uri_length)
-					{
-						int r=match.position-match.pattern.ptext.length;
-						if(it->second.type == E_TYPE_DOMAIN)
-						{
-							if(r > 0)
-							{
-								if(it->second.match_exactly)
-									continue;
-								if(*(uri_ptr+r-1) != '.')
-									continue;
-							}
-						} else if(it->second.type == E_TYPE_URL)
-						{
-							if(m_WorkerConfig.match_url_exactly)
-								continue;
-							if(r > 0)
-							{
-								if(*(uri_ptr+r-1) != '.')
-									continue;
-							}
-						}
-					}
-					found=true;
-				}
-				m_WorkerConfig.atmLock.unlock();
-				if(found)
-				{
-					if(it->second.type == E_TYPE_DOMAIN) // block by domain...
-					{
-						m_ThreadStats.matched_domains++;
-//						_logger.debug("Host %s present in domain (file line %u) list from ip %s to ip %s", host, match.id, src_ip->toString(), dst_ip->toString());
-						if(m_WorkerConfig.http_redirect)
-						{
-							std::string add_param;
-							switch (m_WorkerConfig.add_p_type)
-							{
-								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
-									break;
-								case A_TYPE_URL: add_param="url="+uri;
-									break;
-								default: break;
-							}
-
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
-
-//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
-							m_ThreadStats.redirected_domains++;
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-							m_ThreadStats.sended_rst++;
-						}
-						return true;
-					} else if(it->second.type == E_TYPE_URL) // block by url...
-					{
-						m_ThreadStats.matched_urls++;
-//						_logger.debug("URL %s present in url (file pos %u) list from ip %s to ip %s", uri, match.id, src_ip->toString(), dst_ip->toString());
-						if(m_WorkerConfig.http_redirect)
-						{
-							std::string add_param;
-							switch (m_WorkerConfig.add_p_type)
-							{
-								case A_TYPE_ID: add_param="id="+std::to_string(it->second.lineno);
-									break;
-								case A_TYPE_URL: add_param="url="+uri;
-									break;
-								default: break;
-							}
-	
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
-
-//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port, src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len),/* flag psh */ 1, add_param));
-							m_ThreadStats.redirected_urls++;
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-//							SenderTask::queue.enqueueNotification(new RedirectNotification(tcp_src_port, tcp_dst_port,src_ip.get(), dst_ip.get(), /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, empty_str, true));
-							m_ThreadStats.sended_rst++;
-						}
-//						flow_info->block=true;
-						return true;
-					}
-				}
-			}
-		}
 		if(ip_version == 4 && m_WorkerConfig.nm && m_WorkerConfig.notify_enabled && acl_action == ACL::ACL_NOTIFY)
 		{
 			uint32_t notify_group = (pkt_info->acl_res & ACL_NOTIFY_GROUP) >> 4;
@@ -500,6 +755,7 @@ bool WorkerThread::run(uint32_t coreId)
 	struct lcore_conf* qconf;
 	uint16_t nb_rx;
 	struct rte_mbuf *bufs[EXTFILTER_CAPTURE_BURST_SIZE];
+	int tx_ret;
 
 	lcore_id = rte_lcore_id();
 	qconf = extFilter::getLcoreConf(lcore_id);
@@ -516,10 +772,27 @@ bool WorkerThread::run(uint32_t coreId)
 
 	const uint64_t timer_interval = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * (1000*1000);
 
+	const uint64_t gc_int_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S * EXTF_GC_INTERVAL;
+
+	int gc_budget_ipv4 = ((double)m_FlowHash->getHashSizeIPv4()/(EXTF_ALL_GC_INTERVAL*1000*1000))*EXTF_GC_INTERVAL;
+
+	int gc_budget_ipv6 = ((double)m_FlowHash->getHashSizeIPv6()/(EXTF_ALL_GC_INTERVAL*1000*1000))*EXTF_GC_INTERVAL;
+
+	_logger.information("gc_budget_ipv4: %d, gc_budget_ipv6: %d", gc_budget_ipv4, gc_budget_ipv6);
+
+	_logger.information("Running gc clean every %" PRIu64 " cycles. Cycles per second %" PRIu64, gc_int_tsc, rte_get_timer_hz());
+
 	uint64_t last_sec = 0;
 
-	uint64_t cur_tsc, diff_timer_tsc;
+	uint64_t cur_tsc, diff_timer_tsc, diff_gc_tsc;
 	uint64_t prev_timer_tsc = 0;
+	uint64_t prev_gc_tsc=0;
+
+	uint32_t iter_flows_ipv4 = 0;
+	uint32_t iter_flows_ipv6 = 0;
+
+	uint8_t sender_port = m_WorkerConfig.sender_port;
+	uint16_t tx_queue_id = m_WorkerConfig.tx_queue_id;
 
 	_logger.debug("Starting working thread on core %u", coreId);
 
@@ -538,7 +811,6 @@ bool WorkerThread::run(uint32_t coreId)
 			break;
 
 		cur_tsc = rte_rdtsc();
-		last_time = cur_tsc;
 
 #ifdef ATOMIC_ACL
 #define SWAP_ACX(cur_acx, new_acx)                                            \
@@ -625,8 +897,86 @@ bool WorkerThread::run(uint32_t coreId)
 			m_ThreadStats.latency_counters.total_cycles += cycles;
 			m_ThreadStats.latency_counters.blocked_cycles += blocked_cycles;
 			m_ThreadStats.latency_counters.total_pkts += nb_rx;
+			if(_n_send_pkts > 0)
+			{
+				tx_ret = rte_eth_tx_burst(sender_port, tx_queue_id, _sender_buf, _n_send_pkts);
+				if (unlikely(tx_ret < _n_send_pkts))
+				{
+					do {
+						rte_pktmbuf_free(_sender_buf[tx_ret]);
+					} while (++tx_ret < _n_send_pkts);
+				}
+				_n_send_pkts = 0;
+			}
 		}
 
+		diff_gc_tsc = cur_tsc - prev_gc_tsc;
+		if (unlikely(diff_gc_tsc >= gc_int_tsc))
+		{
+			int z=0;
+			while(z < gc_budget_ipv4 && iter_flows_ipv4 < m_FlowHash->getHashSizeIPv4())
+			{
+				if(ipv4_flows[iter_flows_ipv4] && (last_sec - (ipv4_flows[iter_flows_ipv4]->last_timestamp) > EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME))
+				{
+					void *key_ptr;
+					int fr=rte_hash_get_key_with_position(m_FlowHash->getIPv4Hash(), iter_flows_ipv4, &key_ptr);
+					if(fr < 0)
+					{
+						_logger.error("Key not found in the hash for the position %d", (int) iter_flows_ipv4);
+					} else {
+						int32_t delr=rte_hash_del_key(m_FlowHash->getIPv4Hash(), key_ptr);
+						if(delr < 0)
+						{
+							_logger.error("Error (%d) occured while delete data from the ipv4 flow hash table", (int)delr);
+						} else {
+							ipv4_flows[iter_flows_ipv4]->free_mem(dpi_state->flow_cleaner_callback);
+							rte_mempool_put(flows_pool, ipv4_flows[iter_flows_ipv4]);
+							ipv4_flows[iter_flows_ipv4] = nullptr;
+							m_ThreadStats.ndpi_flows_count--;
+							m_ThreadStats.ndpi_ipv4_flows_count--;
+							m_ThreadStats.ndpi_flows_deleted++;
+							m_ThreadStats.ndpi_flows_expired++;
+						}
+					}
+				}
+				z++;
+				iter_flows_ipv4++;
+			}
+			if(iter_flows_ipv4 >= m_FlowHash->getHashSizeIPv4())
+				iter_flows_ipv4 = 0;
+			z=0;
+			while(z < gc_budget_ipv6 && iter_flows_ipv6 < m_FlowHash->getHashSizeIPv6())
+			{
+				if(ipv6_flows[iter_flows_ipv6] && ((last_sec - ipv6_flows[iter_flows_ipv6]->last_timestamp) > EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME))
+				{
+					void *key_ptr;
+					int fr=rte_hash_get_key_with_position(m_FlowHash->getIPv6Hash(), iter_flows_ipv6, &key_ptr);
+					if(fr < 0)
+					{
+						_logger.error("Key not found in the hash for the position %d", (int) iter_flows_ipv6);
+					} else {
+						int32_t delr=rte_hash_del_key(m_FlowHash->getIPv6Hash(), key_ptr);
+						if(delr < 0)
+						{
+							_logger.error("Error (%d) occured while delete data from the ipv6 flow hash table", (int)delr);
+						} else {
+							ipv6_flows[iter_flows_ipv6]->free_mem(dpi_state->flow_cleaner_callback);
+							rte_mempool_put(flows_pool,ipv6_flows[iter_flows_ipv6]);
+							ipv6_flows[iter_flows_ipv6] = nullptr;
+							m_ThreadStats.ndpi_flows_count--;
+							m_ThreadStats.ndpi_ipv6_flows_count--;
+							m_ThreadStats.ndpi_flows_deleted++;
+							m_ThreadStats.ndpi_flows_expired++;
+						}
+					}
+				}
+				z++;
+				iter_flows_ipv6++;
+			}
+			if(iter_flows_ipv6 >= m_FlowHash->getHashSizeIPv6())
+				iter_flows_ipv6 = 0;
+			prev_gc_tsc = cur_tsc;
+		}
 		diff_timer_tsc = cur_tsc - prev_timer_tsc;
 		if (unlikely(diff_timer_tsc >= timer_interval))
 		{
