@@ -19,6 +19,7 @@
 #include <iomanip>
 #include "worker.h"
 #include "main.h"
+#include "dpi.h"
 #include <api.h>
 
 #include "AhoCorasickPlus.h"
@@ -28,12 +29,8 @@
 #include "acl.h"
 #include "cmdlinetask.h"
 #include "notification.h"
-#include "dpi.h"
 
 #define MBUF_CACHE_SIZE 256
-
-#define RX_RING_SIZE 256
-#define TX_RING_SIZE 512
 
 #define DPDK_CONFIG_HEADER_SPLIT	0 /**< Header Split disabled */
 #define DPDK_CONFIG_SPLIT_HEADER_SIZE	0
@@ -231,16 +228,15 @@ int extFilter::initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_
 	if (retval != 0)
 		return retval;
 
-	struct rte_mempool *mpool = rte_pktmbuf_pool_create("Sender TX", 1000, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_eth_dev_socket_id(port));
+	struct rte_mempool *mpool = rte_pktmbuf_pool_create("Sender RX", 1000, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_eth_dev_socket_id(port));
 
-		logger().information("sender port=%d rx_queueid=%d nb_rxd=%d", (int) port, (int) 0, (int) _nb_rxd);
-		retval = rte_eth_rx_queue_setup(port, 0, _nb_rxd, rte_eth_dev_socket_id(port), NULL, mpool);
-		if (retval < 0)
-		{
-			logger().fatal("rte_eth_rx_queue_setup: err=%d (%s) port=%d", (int) retval, rte_strerror(-retval), (int)port);
-			return retval;
-		}
-
+	logger().information("sender port=%d rx_queueid=%d nb_rxd=%d", (int) port, (int) 0, (int) _nb_rxd);
+	retval = rte_eth_rx_queue_setup(port, 0, _nb_rxd, rte_eth_dev_socket_id(port), NULL, mpool);
+	if (retval < 0)
+	{
+		logger().fatal("rte_eth_rx_queue_setup: err=%d (%s) port=%d", (int) retval, rte_strerror(-retval), (int)port);
+		return retval;
+	}
 
 	for(auto z=0; z < nb_tx_queue; z++)
 	{
@@ -549,9 +545,9 @@ int extFilter::initMemory(uint8_t nb_ports)
 	nb_rx_queue = _get_ports_n_rx_queues();
 	nb_tx_queue = nb_rx_queue;
 
-	nb_mbuf = RTE_MAX((nb_ports * nb_rx_queue * RTE_TEST_RX_DESC_DEFAULT +
+	nb_mbuf = RTE_MAX((nb_ports * nb_rx_queue * EXTF_RX_DESC_DEFAULT +
 		 nb_ports * nb_lcores * EXTFILTER_CAPTURE_BURST_SIZE +
-		 nb_ports * nb_tx_queue * RTE_TEST_TX_DESC_DEFAULT +
+		 nb_ports * nb_tx_queue * EXTF_TX_DESC_DEFAULT +
 		 nb_lcores * MBUF_CACHE_SIZE),
 		(unsigned)16384);
 

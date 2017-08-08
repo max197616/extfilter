@@ -14,8 +14,8 @@
 #define MAX_LCORE_PARAMS 1024
 #define NB_SOCKETS 4
 #define MAX_RX_QUEUE_PER_PORT 128
-#define RTE_TEST_RX_DESC_DEFAULT 128
-#define RTE_TEST_TX_DESC_DEFAULT 512
+#define EXTF_RX_DESC_DEFAULT 256
+#define EXTF_TX_DESC_DEFAULT 512
 
 #define EXTF_MAX_PKT_BURST 32
 
@@ -234,8 +234,8 @@ private:
 	struct lcore_params* _lcore_params;
 	struct rte_mempool* _pktmbuf_pool[NB_SOCKETS];
 
-	uint16_t _nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-	uint16_t _nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+	uint16_t _nb_rxd = EXTF_RX_DESC_DEFAULT;
+	uint16_t _nb_txd = EXTF_TX_DESC_DEFAULT;
 	unsigned _nb_ports;
 
 	ACL *_acl;
