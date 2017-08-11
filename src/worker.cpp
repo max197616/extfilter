@@ -30,7 +30,7 @@
 
 inline u_int8_t ext_dpi_v6_addresses_equal(uint64_t *x, uint64_t *y)
 {
-	if(*x == *y && *(x+1) == *(y+1))
+	if(x[0] == y[0] && x[1] == y[1])
 		return 1;
 	return 0;
 }
@@ -426,13 +426,26 @@ ext_dpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, uint64_t timestamp, 
 		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv6Hash(), host_key, sig);
 		if(ret >= 0)
 		{
-			*idx = ret;
-			if(ext_dpi_v6_addresses_equal((uint64_t *)&(ipv6_flows[ret]->src_addr_t.ipv6_srcaddr),(uint64_t *) &pkt_infos->src_addr_t.ipv6_srcaddr) && ipv6_flows[ret]->srcport == pkt_infos->srcport)
-				pkt_infos->direction=0;
-			else
-				pkt_infos->direction=1;
-			ipv6_flows[ret]->last_timestamp = timestamp;
-			return ipv6_flows[ret];
+			if(pkt_infos->l4prot == IPPROTO_TCP && ipv6_flows[ret]->infos.tracking.seen_rst && ((struct tcphdr*) (pkt_infos->pkt + pkt_infos->l4offset))->syn)
+			{
+				// Delete old flow.
+				ipv6_flows[ret]->free_mem(dpi_state->flow_cleaner_callback);
+				rte_mempool_put(flows_pool, ipv6_flows[ret]);
+				ipv6_flows[ret] = nullptr;
+				m_ThreadStats.ndpi_flows_count--;
+				m_ThreadStats.ndpi_ipv6_flows_count--;
+				m_ThreadStats.ndpi_flows_deleted++;
+				// Force the following code to create a new flow.
+				ret = -ENOENT;
+			} else {
+				*idx = ret;
+				if(ext_dpi_v6_addresses_equal((uint64_t *)&(ipv6_flows[ret]->src_addr_t.ipv6_srcaddr),(uint64_t *) &pkt_infos->src_addr_t.ipv6_srcaddr) && ipv6_flows[ret]->srcport == pkt_infos->srcport)
+					pkt_infos->direction=0;
+				else
+					pkt_infos->direction=1;
+				ipv6_flows[ret]->last_timestamp = timestamp;
+				return ipv6_flows[ret];
+			}
 		}
 		if(ret == -EINVAL)
 		{
@@ -483,13 +496,26 @@ ext_dpi_flow_info *WorkerThread::getFlow(uint8_t *host_key, uint64_t timestamp, 
 		int32_t ret = rte_hash_lookup_with_hash(m_FlowHash->getIPv4Hash(), host_key, sig);
 		if(ret >= 0)
 		{
-			*idx = ret;
-			if(ipv4_flows[ret]->src_addr_t.ipv4_srcaddr == pkt_infos->src_addr_t.ipv4_srcaddr && ipv4_flows[ret]->srcport == pkt_infos->srcport)
-				pkt_infos->direction=0;
-			else
-				pkt_infos->direction=1;
-			ipv4_flows[ret]->last_timestamp = timestamp;
-			return ipv4_flows[ret];
+			if(pkt_infos->l4prot == IPPROTO_TCP && ipv4_flows[ret]->infos.tracking.seen_rst && ((struct tcphdr*) (pkt_infos->pkt + pkt_infos->l4offset))->syn)
+			{
+				// Delete old flow.
+				ipv4_flows[ret]->free_mem(dpi_state->flow_cleaner_callback);
+				rte_mempool_put(flows_pool, ipv4_flows[ret]);
+				ipv4_flows[ret] = nullptr;
+				m_ThreadStats.ndpi_flows_count--;
+				m_ThreadStats.ndpi_ipv4_flows_count--;
+				m_ThreadStats.ndpi_flows_deleted++;
+				// Force the following code to create a new flow.
+				ret = -ENOENT;
+			} else {
+				*idx = ret;
+				if(ipv4_flows[ret]->src_addr_t.ipv4_srcaddr == pkt_infos->src_addr_t.ipv4_srcaddr && ipv4_flows[ret]->srcport == pkt_infos->srcport)
+					pkt_infos->direction=0;
+				else
+					pkt_infos->direction=1;
+				ipv4_flows[ret]->last_timestamp = timestamp;
+				return ipv4_flows[ret];
+			}
 		}
 		if(ret == -EINVAL)
 		{
