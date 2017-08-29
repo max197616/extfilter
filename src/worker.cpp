@@ -51,14 +51,22 @@ void host_cb(dpi_http_message_informations_t* http_informations, const u_char* a
 
 void url_cb(const unsigned char* url, u_int32_t url_length, dpi_pkt_infos_t* pkt_informations, void** flow_specific_user_data, void* user_data)
 {
-	if(*flow_specific_user_data == NULL && url_length > 0)
+	if(url_length == 0)
+		return ;
+	struct dpi_flow_info *u = (struct dpi_flow_info *) *flow_specific_user_data;
+	if(u == nullptr)
 	{
-		struct dpi_flow_info *u= (struct dpi_flow_info *)calloc(1, sizeof(dpi_flow_info));
-		u->url = (char *)calloc(1, url_length+1);
-		memcpy(u->url, url, url_length);
-		u->url_size = url_length;
+		u = (struct dpi_flow_info *)calloc(1, sizeof(dpi_flow_info));
 		*flow_specific_user_data = u;
 	}
+	if(u->url == nullptr)
+	{
+		u->url = (char *)malloc(url_length+1);
+	} else {
+		u->url = (char *)realloc(u->url, url_length+1);
+	}
+	memcpy(u->url, url, url_length);
+	u->url_size = url_length;
 }
 
 void ssl_cert_cb(char *certificate, int size, void *user_data, dpi_pkt_infos_t *pkt)
@@ -705,7 +713,8 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 			uint32_t notify_group = (pkt_info->acl_res & ACL_NOTIFY_GROUP) >> 4;
 			if(m_WorkerConfig.nm->needNotify(ipv4_header->src_addr, notify_group))
 			{
-				std::string add_param("url="+uri);
+				//std::string add_param("url="+uri);
+				std::string add_param;
 				NotifyManager::queue.enqueueNotification(new NotifyRedirect(notify_group, tcp_src_port, tcp_dst_port, ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+payload_len), 1, (char *)add_param.c_str()));
 				return true;
 			}
