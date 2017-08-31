@@ -29,6 +29,7 @@
 #include "acl.h"
 #include "cmdlinetask.h"
 #include "notification.h"
+#include "config.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -910,6 +911,11 @@ void extFilter::defineOptions(Poco::Util::OptionSet& options)
 			.required(true)
 			.repeatable(false)
 			.argument("FILE"));
+	options.addOption(
+			Poco::Util::Option("version","v","Display version and exit.")
+			.required(false)
+			.repeatable(false)
+			.callback(Poco::Util::OptionCallback<extFilter>(this, &extFilter::handleVersion)));
 }
 
 void extFilter::handleOption(const std::string& name,const std::string& value)
@@ -926,6 +932,15 @@ void extFilter::handleHelp(const std::string& name,const std::string& value)
 	_helpRequested=true;
 	displayHelp();
 	stopOptionsProcessing();
+	exit(0);
+}
+
+void extFilter::handleVersion(const std::string& name,const std::string& value)
+{
+	_helpRequested = true;
+	std::cout << "extFilter version " << VERSION << std::endl;
+	stopOptionsProcessing();
+	exit(0);
 }
 
 void extFilter::displayHelp()

@@ -65,6 +65,7 @@ public:
 	void uninitialize();
 	void defineOptions(Poco::Util::OptionSet& options);
 	void handleOption(const std::string& name,const std::string& value);
+	void handleVersion(const std::string& name,const std::string& value);
 	void handleHelp(const std::string& name,const std::string& value);
 	void displayHelp();
 
