@@ -308,7 +308,7 @@ int DSender::Send(uint8_t *buffer, int size, void *addr, int addr_size)
 	return pkt_size;
 }
 
-ESender::ESender(struct nparams &prm, uint8_t port, struct rte_mempool *mp, WorkerThread *wt) : BSender("DSender", prm.params),
+ESender::ESender(struct nparams &prm, uint8_t port, struct rte_mempool *mp, WorkerThread *wt) : BSender("ESender", prm.params),
 	_port(port),
 	_mp(mp),
 	_wt(wt)
