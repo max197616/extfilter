@@ -119,6 +119,8 @@ int BSender::makePacket(void *ip_from, void *ip_to, int ip_ver, int port_from, i
 	tcph->seq = acknum;
 	tcph->doff = 5;
 	tcph->syn = 0;
+	tcph->res1 = 0;
+	tcph->res2 = 0;
 	tcph->rst = f_reset;
 	tcph->psh = f_psh;
 	if(f_reset)
