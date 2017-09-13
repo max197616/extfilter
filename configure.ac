@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(extFilter, 0.86.1, max1976@mail.ru)
+AC_INIT(extFilter, 0.86.2, max1976@mail.ru)
 
 DPDK_HOME=
 DPDK_TARGET=

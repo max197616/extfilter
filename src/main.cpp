@@ -1026,8 +1026,12 @@ int extFilter::main(const ArgVec& args)
 					logger().fatal("Cannot initialize port %d", (int) portid);
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
-				
-				_mp = rte_pktmbuf_pool_create("SenderBuffer", 1000, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+				_mp = rte_pktmbuf_pool_create("SenderBuffer", 8192, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+				if(_mp == nullptr)
+				{
+					logger().fatal("Unable to allocate mempool for sender");
+					return Poco::Util::Application::EXIT_CONFIG;
+				}
 			} else {
 				if(initPort(portid, &ports_eth_addr[portid]) != 0)
 				{
