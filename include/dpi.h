@@ -7,14 +7,18 @@ struct dpi_flow_info
 {
 	char *url;
 	uint16_t url_size;
-	char *host;
-	uint16_t host_size;
+	bool use_pool;
+	struct rte_mempool *mempool;
+	struct rte_mempool *dpi_mempool;
 	void free_mem()
 	{
-		if(url)
-			free(url);
-		if(host)
-			free(host);
+		if(!use_pool)
+		{
+			if(url)
+				free(url);
+		} else {
+			rte_mempool_put(mempool, url);
+		}
 	}
 };
 

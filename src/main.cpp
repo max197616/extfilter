@@ -58,7 +58,10 @@ void flow_delete_cb(void* flow_specific_user_data)
 	{
 		struct dpi_flow_info *u = (struct dpi_flow_info *) flow_specific_user_data;
 		u->free_mem();
-		free(u);
+		if(u->dpi_mempool == nullptr)
+			free(u);
+		else
+			rte_mempool_put(u->dpi_mempool, u);
 	}
 }
 
@@ -624,6 +627,7 @@ void extFilter::initialize(Application& self)
 	if(_dpi_fragmentation_ipv6_state)
 		_dpi_fragmentation_ipv6_table_size = config().getInt("dpi.fragmentation_ipv6_table_size", 512);
 	_dpi_tcp_reordering = config().getBool("dpi.tcp_reordering", true);
+	_dpi_maximum_url_size = config().getInt("dpi.max_url_size", 600);
 
 	_num_of_senders = config().getInt("num_of_senders", 1);
 	_lower_host = config().getBool("lower_host", false);
@@ -1060,6 +1064,7 @@ int extFilter::main(const ArgVec& args)
 		int max_ipv4_flows_per_core = ceil((float)_dpi_max_active_flows_ipv4/(float)(_nb_lcore_params));
 		int max_ipv6_flows_per_core = ceil((float)_dpi_max_active_flows_ipv6/(float)(_nb_lcore_params));
 
+
 		uint16_t tx_queue_id = 0;
 		/* launch per-lcore init on every lcore */
 		RTE_LCORE_FOREACH(lcore_id)
@@ -1092,6 +1097,7 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].atmSSLDomainsLock = new Poco::FastMutex();
 				workerConfigArr[lcore_id].sender_port = _dpdk_send_port;
 				workerConfigArr[lcore_id].tx_queue_id = tx_queue_id;
+				workerConfigArr[lcore_id].maximum_url_size = _dpi_maximum_url_size;
 
 				logger().information("Initializing dpi flow hash with ipv4 max flows %d, ipv6  max flows %d.", max_ipv4_flows_per_core, max_ipv6_flows_per_core);
 				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, max_ipv4_flows_per_core, max_ipv6_flows_per_core);
@@ -1139,7 +1145,22 @@ int extFilter::main(const ArgVec& args)
 					prms.mac = (uint8_t *)&ports_eth_addr[1];
 					prms.to_mac = &sender_mac[0];
 				}
-				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id), mFlowHash, prms, _mp);
+
+				struct rte_mempool *url_mempool = nullptr;
+				unsigned url_entries = (max_ipv4_flows_per_core+max_ipv6_flows_per_core)*PERCENT_URL_ENTRIES;
+				std::string pool_name("URLPool-" + std::to_string(lcore_id));
+				logger().information("Create pool '%s' for urls with number of entries: %d, size: %d bytes", pool_name, (int) url_entries, (int)(url_entries * (_dpi_maximum_url_size+1)));
+				url_mempool = rte_mempool_create(pool_name.c_str(), url_entries, _dpi_maximum_url_size+1, 0, 0, NULL, NULL, NULL, NULL, rte_lcore_to_socket_id(lcore_id), 0);
+				if(url_mempool == nullptr)
+					logger().warning("Unable to create mempool for url. Will be use malloc. This may affect performance.");
+				struct rte_mempool *dpi_mempool = nullptr;
+				pool_name.assign("DPIPool-" + std::to_string(lcore_id));
+				logger().information("Create pool '%s' for http dissector with number of entries: %d, size: %d bytes", pool_name, (int) url_entries, (int)(url_entries * sizeof(dpi_flow_info)));
+				dpi_mempool = rte_mempool_create(pool_name.c_str(), url_entries, sizeof(dpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_lcore_to_socket_id(lcore_id), 0);
+				if(dpi_mempool == nullptr)
+					logger().warning("Unable to create mempool for http dissector. Will be use malloc. This may affect performance.");
+
+				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id), mFlowHash, prms, _mp, url_mempool, dpi_mempool);
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)

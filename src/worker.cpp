@@ -49,6 +49,56 @@ void host_cb(dpi_http_message_informations_t* http_informations, const u_char* a
 	}
 }
 
+void url_cb_mempool(const unsigned char* url, u_int32_t url_length, dpi_pkt_infos_t* pkt_informations, void** flow_specific_user_data, void* user_data)
+{
+	if(url_length == 0)
+		return ;
+	WorkerThread *obj = (WorkerThread *) user_data;
+	struct dpi_flow_info *u = (struct dpi_flow_info *) *flow_specific_user_data;
+	if(u == nullptr)
+	{
+		if(rte_mempool_get(obj->getDPIMempool(), (void **)&u) != 0)
+		{
+			obj->getStats().dpi_no_mempool_http++;
+			return ;
+		} else {
+			memset(u, 0, sizeof(dpi_flow_info));
+			u->dpi_mempool = obj->getDPIMempool();
+			*flow_specific_user_data = u;
+		}
+	}
+	struct rte_mempool *mempool = obj->getUrlMempool();
+	if(url_length+1 > obj->getConfig().maximum_url_size)
+	{
+		url_length = obj->getConfig().maximum_url_size;
+	}
+	u->mempool = mempool;
+	if(u->url == nullptr)
+	{
+		if(mempool != nullptr)
+		{
+			if(rte_mempool_get(mempool, (void **)&u->url) != 0)
+				u->mempool = nullptr;
+			else
+				u->use_pool = true;
+		}
+		if(!u->use_pool)
+		{
+			obj->getStats().dpi_use_url_malloc++;
+			u->url = (char *)malloc(url_length+1);
+		}
+	} else {
+		if(!u->use_pool)
+		{
+			if((url_length+1) > ((u_int32_t)u->url_size+1))
+				u->url = (char *)realloc(u->url, url_length+1);
+		}
+	}
+	memcpy(u->url, url, url_length);
+	u->url_size = url_length;
+}
+
+
 void url_cb(const unsigned char* url, u_int32_t url_length, dpi_pkt_infos_t* pkt_informations, void** flow_specific_user_data, void* user_data)
 {
 	if(url_length == 0)
@@ -59,11 +109,33 @@ void url_cb(const unsigned char* url, u_int32_t url_length, dpi_pkt_infos_t* pkt
 		u = (struct dpi_flow_info *)calloc(1, sizeof(dpi_flow_info));
 		*flow_specific_user_data = u;
 	}
+	WorkerThread *obj = (WorkerThread *) user_data;
+	struct rte_mempool *mempool = obj->getUrlMempool();
+	if(url_length+1 > obj->getConfig().maximum_url_size)
+	{
+		url_length = obj->getConfig().maximum_url_size;
+	}
+	u->mempool = mempool;
 	if(u->url == nullptr)
 	{
-		u->url = (char *)malloc(url_length+1);
+		if(mempool != nullptr)
+		{
+			if(rte_mempool_get(mempool, (void **)&u->url) != 0)
+				u->mempool = nullptr;
+			else
+				u->use_pool = true;
+		}
+		if(!u->use_pool)
+		{
+			obj->getStats().dpi_use_url_malloc++;
+			u->url = (char *)malloc(url_length+1);
+		}
 	} else {
-		u->url = (char *)realloc(u->url, url_length+1);
+		if(!u->use_pool)
+		{
+			if((url_length+1) > ((u_int32_t)u->url_size+1))
+				u->url = (char *)realloc(u->url, url_length+1);
+		}
 	}
 	memcpy(u->url, url, url_length);
 	u->url_size = url_length;
@@ -77,7 +149,7 @@ void ssl_cert_cb(char *certificate, int size, void *user_data, dpi_pkt_infos_t *
 	obj->setNeedBlock(obj->checkSSL(cert, pkt));
 }
 
-WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp) :
+WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *url_mempool, struct rte_mempool *dpi_mempool) :
 		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
 		dpi_state(state),
@@ -90,8 +162,9 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 
 	// setup peafowl
 	static dpi_http_header_field_callback* single_cb[1]={&host_cb};
+
 	static const char* headers[1]={"host"};
-	static dpi_http_callbacks_t callback={.header_url_callback = url_cb, .header_names = headers, .num_header_types = 1, .header_types_callbacks = single_cb, .header_completion_callback = 0, .http_body_callback = 0};
+	static dpi_http_callbacks_t callback={.header_url_callback = (dpi_mempool == nullptr ? url_cb : url_cb_mempool), .header_names = headers, .num_header_types = 1, .header_types_callbacks = single_cb, .header_completion_callback = 0, .http_body_callback = 0};
 	dpi_http_activate_callbacks(dpi_state, &callback, this);
 	static dpi_ssl_callbacks_t ssl_callback = {.certificate_callback = ssl_cert_cb };
 	dpi_ssl_activate_callbacks(state, &ssl_callback, this);
@@ -126,6 +199,8 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 	} else {
 		_snd = nullptr;
 	}
+	_url_mempool = url_mempool;
+	_dpi_mempool = dpi_mempool;
 }
 
 WorkerThread::~WorkerThread()
@@ -135,11 +210,6 @@ WorkerThread::~WorkerThread()
 	delete m_WorkerConfig.atmSSLDomainsLock;
 	if(_snd != nullptr)
 		delete _snd;
-}
-
-const ThreadStats& WorkerThread::getStats()
-{
-	return m_ThreadStats;
 }
 
 bool WorkerThread::checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt)

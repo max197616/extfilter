@@ -16,7 +16,7 @@
 #define MAX_RX_QUEUE_PER_PORT 128
 #define EXTF_RX_DESC_DEFAULT 256
 #define EXTF_TX_DESC_DEFAULT 512
-
+#define PERCENT_URL_ENTRIES 0.20
 #define EXTF_MAX_PKT_BURST 32
 
 class AhoCorasickPlus;
@@ -223,6 +223,7 @@ private:
 	uint16_t _dpi_fragmentation_ipv4_table_size;
 	uint16_t _dpi_fragmentation_ipv6_table_size;
 	bool _dpi_tcp_reordering;
+	uint16_t _dpi_maximum_url_size;
 
 	int _num_of_senders;
 

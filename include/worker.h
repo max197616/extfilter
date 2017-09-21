@@ -60,6 +60,8 @@ struct WorkerConfig
 	uint8_t sender_port;
 	uint16_t tx_queue_id;
 
+	uint16_t maximum_url_size;
+
 	WorkerConfig()
 	{
 		CoreId = RTE_MAX_LCORE+1;
@@ -116,8 +118,10 @@ private:
 	int _n_send_pkts;
 	struct rte_mbuf* _sender_buf[EXTFILTER_WORKER_BURST_SIZE];
 	ESender *_snd;
+	struct rte_mempool *_url_mempool;
+	struct rte_mempool *_dpi_mempool;
 public:
-	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp);
+	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *url_mempool, struct rte_mempool *dpi_mempool);
 
 	~WorkerThread();
 
@@ -147,9 +151,13 @@ public:
 		m_Stop = true;
 	}
 
-	const ThreadStats& getStats();
+	inline ThreadStats& getStats()
+	{
+		return m_ThreadStats;
+	}
 
-	WorkerConfig& getConfig()
+
+	inline WorkerConfig& getConfig()
 	{
 		return m_WorkerConfig;
 	}
@@ -168,5 +176,15 @@ public:
 	{
 		m_ThreadStats.clear();
 	}
+
+	inline struct rte_mempool *getUrlMempool()
+	{
+		return _url_mempool;
+	}
+	inline struct rte_mempool *getDPIMempool()
+	{
+		return _dpi_mempool;
+	}
+
 };
 

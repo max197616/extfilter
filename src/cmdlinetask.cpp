@@ -374,6 +374,8 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "  Flows deleted: %" PRIu64 "\n", stats.ndpi_flows_deleted);
 	cmdline_printf(cl, "  Flows expired: %" PRIu64 "\n", stats.ndpi_flows_expired);
 	cmdline_printf(cl, "  Reassembled flows: %" PRIu64 "\n", stats.reassembled_flows);
+	cmdline_printf(cl, "  Use malloc for url: %" PRIu64 "\n", stats.dpi_use_url_malloc);
+	cmdline_printf(cl, "  Bad alloc for URL: %" PRIu64 "\n", stats.dpi_no_mempool_http);
 }
 
 static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void* data)
