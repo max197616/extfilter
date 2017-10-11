@@ -1,0 +1,16 @@
+[Unit]
+Description=DPDK device binding
+After=igb_uio_module.service # the binding routing must start after loading the igb_uio module
+
+[Service]
+Type=one-shot
+RemainAfterExit=yes
+# Change the path and the NIC names to an appropriate ones.
+ExecStart=/home/max/dpdk-stable-17.05.1/usertools/dpdk-devbind.py -b igb_uio 0000:01:00.0 0000:01:00.1
+# When stopping the service, bring the NICs back to the linux network stack.
+# NIC PCI addresses can be obtained from /opt/dpdk-16.07/tools/dpdk-devbind.py -s
+# command output
+ExecStop=/home/max/dpdk-stable-17.05.1/usertools/dpdk-devbind.py -b ixgbe 0000:01:00.0 0000:01:00.1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=igb_uio module insertion
+
+[Service]
+Type=one-shot
+RemainAfterExit=yes
+# change that path for the one appropriate for you. Also keep in mind that Exec
+# paths must be absolute
+ExecStart=/sbin/insmod /home/max/dpdk-stable-17.05.1/build/kmod/igb_uio.ko
+ExecStop=/sbin/rmmod igb_uio
+
+[Install]
+WantedBy=multi-user.target
