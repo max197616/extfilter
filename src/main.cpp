@@ -1365,7 +1365,7 @@ void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm)
 	logger().debug("Finish loading domains");
 }
 
-bool extFilter::loadACL(void)
+bool extFilter::loadACL(std::set<struct rte_acl_ctx *> *to_del)
 {
 	std::map<std::string,int> fns;
 	if(!_hostsFile.empty())
@@ -1374,7 +1374,7 @@ bool extFilter::loadACL(void)
 		fns[_sslIpsFile] = ACL::ACL_SSL;
 	if(_notify_enabled && !_notify_acl_file.empty())
 		fns[_notify_acl_file] = ACL::ACL_NOTIFY;
-	if(_acl->initACL(fns, _numa_on))
+	if(_acl->initACL(fns, _numa_on, to_del))
 	{
 		logger().error("Unable to init ACL");
 		return true;

@@ -8,7 +8,8 @@ struct rte_acl_ctx* ACL::ipv6_acx[NB_SOCKETS];
 ACL::ACL() :
 	_logger(Poco::Logger::get("ACL"))
 {
-
+	memset(ipv4_acx, 0, sizeof(ipv4_acx));
+	memset(ipv6_acx, 0, sizeof(ipv6_acx));
 }
 
 ACL::~ACL()
@@ -89,7 +90,7 @@ static void _parse_ipv6(uint32_t *v, struct rte_acl_field field[4], uint32_t mas
 
 }
 
-int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
+int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct rte_acl_ctx*> *to_del)
 {
 	char mapped[NB_SOCKETS];
 
@@ -311,6 +312,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 	{
 		if(mapped[i])
 		{
+			if(to_del != nullptr && ipv4_acx[i] != nullptr)
+				to_del->insert(ipv4_acx[i]);
 			if(acl4_rules.empty())
 			{
 				ipv4_acx[i] = NULL;
@@ -321,6 +324,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on)
 				_logger.error("Setup acl for ipv4 with socketid %d failed, keeping previous rules for that socket", (int) i);
 			}
 
+			if(to_del != nullptr && ipv6_acx[i] != nullptr)
+				to_del->insert(ipv6_acx[i]);
 			if(acl6_rules.empty())
 			{
 				ipv6_acx[i] = NULL;

@@ -148,7 +148,7 @@ public:
 		return _instance;
 	}
 
-	bool loadACL(void);
+	bool loadACL(std::set<struct rte_acl_ctx *> *to_del = NULL);
 
 	inline bool getNotifyEnabled()
 	{

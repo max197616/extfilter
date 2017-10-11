@@ -15,6 +15,7 @@
 #include <rte_cycles.h>
 #include <rte_ip_frag.h>
 #include <rte_ethdev.h>
+#include <rte_atomic.h>
 #include <memory>
 
 #include "worker.h"
@@ -916,18 +917,14 @@ bool WorkerThread::run(uint32_t coreId)
 			break;
 
 		cur_tsc = rte_rdtsc();
-
+//#define ATOMIC_ACL
 #ifdef ATOMIC_ACL
 #define SWAP_ACX(cur_acx, new_acx)                                            \
-	acx = cur_acx;                                                        \
-	if (!rte_atomic64_cmpswap((uintptr_t*)&new_acx, (uintptr_t*)&cur_acx, \
-				  (uintptr_t)new_acx)) {                      \
-		rte_acl_free(acx);                                            \
-	}
+	rte_atomic64_cmpswap((uintptr_t*)&new_acx, (uintptr_t*)&cur_acx, \
+				  (uintptr_t)new_acx))
 #else
 #define SWAP_ACX(cur_acx, new_acx)          \
 	if (unlikely(cur_acx != new_acx)) { \
-		rte_acl_free(cur_acx);      \
 		cur_acx = new_acx;          \
 	}
 #endif

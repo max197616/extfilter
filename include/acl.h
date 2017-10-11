@@ -21,7 +21,7 @@ class ACL
 public:
 	ACL();
 	~ACL();
-	int initACL(std::map<std::string, int> &fns, int _numa_on);
+	int initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct rte_acl_ctx*> *to_del = NULL);
 
 	static struct rte_acl_ctx* ipv4_acx[NB_SOCKETS];
 	static struct rte_acl_ctx* ipv6_acx[NB_SOCKETS];

@@ -50,14 +50,14 @@ void ReloadTask::runTask()
 	{
 		if(_event.tryWait(300))
 		{
+			std::set<struct rte_acl_ctx *> to_del;
 			_logger.information("Reloading data from files...");
-			if(_parent->loadACL())
+			if(_parent->loadACL(&to_del))
 			{
-				_logger.error("Unable to reload ACLs");
+				_logger.error("Unable to load ACLs");
 			} else {
-				_logger.information("ACLs successfully reloaded");
+				_logger.information("ACLs successfully loaded");
 			}
-
 			for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
 			{
 				if(dynamic_cast<WorkerThread*>(*it) == nullptr)
@@ -103,6 +103,10 @@ void ReloadTask::runTask()
 						delete atm_new;
 					}
 				}
+			}
+			for(auto it = to_del.begin(); it != to_del.end(); it++)
+			{
+				rte_acl_free(*it);
 			}
 		}
 	}
