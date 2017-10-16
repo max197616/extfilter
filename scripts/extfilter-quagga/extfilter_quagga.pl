@@ -253,7 +253,8 @@ sub analyse_quagga_networks
 			my $ip_p = $ip_a->print();
 			if($ip_version == 4)
 			{
-				 if(defined $ip_s{$ip_p})
+				$ip_p = "$address/$mask";
+				if(defined $ip_s{$ip_p})
 				{
 					delete $ips_to_add{$ip_p};
 				} else {
@@ -278,6 +279,7 @@ sub analyse_quagga_networks
 			my $ip_p = $ip_a->print();
 			if($ip_version == 4)
 			{
+				$ip_p = "$address/$mask";
 				if(defined $ip_s_null{$ip_p})
 				{
 					delete $ips_to_add_null{$ip_p};
