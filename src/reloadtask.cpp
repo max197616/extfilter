@@ -72,10 +72,16 @@ void ReloadTask::runTask()
 					{
 						_parent->loadDomains(_parent->getSSLFile(), atm_new);
 						atm_new->finalize();
-						config.atmSSLDomainsLock->lock();
 						to_del_atm = config.atmSSLDomains;
-						config.atmSSLDomains = atm_new;
-						config.atmSSLDomainsLock->unlock();
+						config.atmSSLDomains_new = atm_new;
+						rte_mb();
+						int cnt = 15;
+						do {
+							sleep(10);
+							--cnt;
+						} while (cnt > 0 && config.atmSSLDomains_new != config.atmSSLDomains);
+						if(cnt == 0)
+							_logger.warning("Something wrong with worker thread on core %u", (*it)->getCoreId());
 						delete to_del_atm;
 						_logger.information("Reloaded data for ssl domains list for core %u", (*it)->getCoreId());
 					} catch (Poco::Exception &excep)
@@ -91,10 +97,16 @@ void ReloadTask::runTask()
 					{
 						_parent->loadDomainsURLs(_parent->getDomainsFile(), _parent->getURLsFile(), atm_new);
 						atm_new->finalize();
-						config.atmLock->lock();
 						to_del_atm = config.atm;
-						config.atm = atm_new;
-						config.atmLock->unlock();
+						config.atm_new = atm_new;
+						rte_mb();
+						int cnt = 15;
+						do {
+							sleep(10);
+							--cnt;
+						} while (cnt > 0 && config.atm_new != config.atm);
+						if(cnt == 0)
+							_logger.warning("Something wrong with worker thread on core %u", (*it)->getCoreId());
 						delete to_del_atm;
 						_logger.information("Reloaded data for domains and urls list for core %u", (*it)->getCoreId());
 					} catch (Poco::Exception &excep)

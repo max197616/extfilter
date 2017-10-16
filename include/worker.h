@@ -8,6 +8,7 @@
 #include <Poco/Mutex.h>
 #include <Poco/HashMap.h>
 #include <Poco/Logger.h>
+#include <Poco/URI.h>
 #include <rte_hash.h>
 #include <api.h>
 #include "dtypes.h"
@@ -39,11 +40,10 @@ struct WorkerConfig
 	uint32_t CoreId;
 
 	uint8_t port;
-
 	AhoCorasickPlus *atm;
-	Poco::FastMutex *atmLock; // для загрузки url
+	AhoCorasickPlus *atm_new;
 	AhoCorasickPlus *atmSSLDomains;
-	Poco::FastMutex *atmSSLDomainsLock; // для загрузки domains
+	AhoCorasickPlus *atmSSLDomains_new;
 
 	bool match_url_exactly;
 	bool lower_host;
@@ -67,6 +67,8 @@ struct WorkerConfig
 		CoreId = RTE_MAX_LCORE+1;
 		atm = NULL;
 		atmSSLDomains = NULL;
+		atm_new = NULL;
+		atmSSLDomains_new = NULL;
 		match_url_exactly = false;
 		lower_host = false;
 		block_ssl_no_sni = false;
@@ -76,8 +78,6 @@ struct WorkerConfig
 		remove_dot = true;
 		notify_enabled = false;
 		nm = nullptr;
-		atmLock = nullptr;
-		atmSSLDomainsLock = nullptr;
 	}
 };
 
@@ -120,6 +120,7 @@ private:
 	ESender *_snd;
 	struct rte_mempool *_url_mempool;
 	struct rte_mempool *_dpi_mempool;
+	Poco::URI *uri_p;
 public:
 	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *url_mempool, struct rte_mempool *dpi_mempool);
 

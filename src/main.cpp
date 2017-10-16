@@ -1074,16 +1074,16 @@ int extFilter::main(const ArgVec& args)
 			{
 				if(!_domainsFile.empty() && !_urlsFile.empty())
 				{
-					workerConfigArr[lcore_id].atm = new AhoCorasickPlus();
-					loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[lcore_id].atm);
-					workerConfigArr[lcore_id].atm->finalize();
+					workerConfigArr[lcore_id].atm_new = new AhoCorasickPlus();
+					loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[lcore_id].atm_new);
+					workerConfigArr[lcore_id].atm_new->finalize();
 				}
 				workerConfigArr[lcore_id].block_ssl_no_sni = _block_ssl_no_sni;
 				if(!_sslFile.empty())
 				{
-					workerConfigArr[lcore_id].atmSSLDomains = new AhoCorasickPlus();
-					loadDomains(_sslFile, workerConfigArr[lcore_id].atmSSLDomains);
-					workerConfigArr[lcore_id].atmSSLDomains->finalize();
+					workerConfigArr[lcore_id].atmSSLDomains_new = new AhoCorasickPlus();
+					loadDomains(_sslFile, workerConfigArr[lcore_id].atmSSLDomains_new);
+					workerConfigArr[lcore_id].atmSSLDomains_new->finalize();
 				}
 				workerConfigArr[lcore_id].match_url_exactly = _match_url_exactly;
 				workerConfigArr[lcore_id].lower_host = _lower_host;
@@ -1093,8 +1093,6 @@ int extFilter::main(const ArgVec& args)
 				workerConfigArr[lcore_id].add_p_type = _add_p_type;
 				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
 				workerConfigArr[lcore_id].nm = nm;
-				workerConfigArr[lcore_id].atmLock = new Poco::FastMutex();
-				workerConfigArr[lcore_id].atmSSLDomainsLock = new Poco::FastMutex();
 				workerConfigArr[lcore_id].sender_port = _dpdk_send_port;
 				workerConfigArr[lcore_id].tx_queue_id = tx_queue_id;
 				workerConfigArr[lcore_id].maximum_url_size = _dpi_maximum_url_size;

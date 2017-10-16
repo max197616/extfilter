@@ -2,7 +2,6 @@
 #include <inttypes.h>
 #include <netinet/in.h>
 #include <Poco/Stopwatch.h>
-#include <Poco/URI.h>
 #include <Poco/Net/IPAddress.h>
 #include <sstream>
 #include <iomanip>
@@ -202,13 +201,13 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 	}
 	_url_mempool = url_mempool;
 	_dpi_mempool = dpi_mempool;
+	uri_p = new Poco::URI("http://www.longurlmakerrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr.com/go?id=83olengthy1195stretchingShortURL2s11Beam.tocYepItShortlinksqstretchxrunning1c3stretched2sy436vxfaraway0096ShredURLFwdURL4n111aLiteURL09f0307whighgreatrangy5erunningEasyURL0b6sh6aprotracted1140elongated120towering3DecentURL1g0remotea14great168lEasyURL4continued70f6runningURLviUlimit20v94prolonged0r07Ne1stretcheddistant6URLCutterhighEasyURLlnk.inextensivedestretched1003bShim1041FhURLa39aURLvirunning590kShrinkURLaa1w7elongated010lofty1312549h6bShim9045ar01drawn%2Bout0g8egj10PiURL2bf113protracted154100flingeringShim7prolongedspread%2Bout10301URL8loftysustainedenduringdeep0SHurlaf043far%2Breachingo1deep17enlargede01drawn%2Bout1d57lnk.inSHurlfar%2Breaching001Smallrk2runningDigBigSimURLEasyURLflengthenedURLPie004301URL0spun%2Boutwt1expandede0910GetShortytowering0distant6ffhigheShim2loftyspun%2Bout1NanoRef1401spread%2Boutcetallexpanded5stretched0RubyURLURLHawkloftyaB654UrlTea0URLcut1prolonged2dx7SHurl74j41c2301URLWapURL60lDoiopMyURLTightURL01Redirx21stringyDoiopURLvi4YepItb0URLcut0620stretchingd180lengthened2171FwdURLc1b5URLHawk35lingeringCanURLdrawn%2Boutlengthened0c0rangySimURLprotracted78440muganglingShrtnds2oa00greatb30hyfar%2Breaching1k7Smallr110o715far%2Bofflingering41elongate9k1running3TraceURL3towering6rangy0lanky1EasyURLURLHawkstretchingstretch076jdeep151far%2BofffShortURL05TinyLink78f32715ufdistantprolongedstretchingwd30lengthened1elongated0c8NanoRefsustained7Metamark3w9301URLIs.gd11URL.co.ukDecentURL5extensive1ShoterLinkShorl00v39lengthyntall8f0041f6d5prolonged111EasyURLcontinuedShortlinks4c4408stringym5d0drawn%2Boutf9dShrinkURLURLCutterURLCutter3agangling3SnipURL0G8L00adiYepIt0Minilien91l1URLPie0SnipURLlofty00Shim5hdeepsa1continuedprotracted15765fSnipURLA2Nfar%2Boff1qfar%2Boffstretchinglengthyfar%2Boffc78drawn%2Bout21outstretchedspun%2Boutz52sremoteremoteprolongedeq0yUlimitb1B651CanURL6sustainedj02h117010URLHawk8high0outstretched8aafvstretch0037runningaextensive9ndeep0U7611yab5URl.ieShortenURLsustainedShredURLx60WapURL8aremote9expanded2tall09601gangling21A2N9d48rangysustained36far%2Breachingstretching2lengthened41NotLong11210Ulimit0814Is.gdPiURL89");
 }
 
 WorkerThread::~WorkerThread()
 {
 	dpi_terminate(dpi_state);
-	delete m_WorkerConfig.atmLock;
-	delete m_WorkerConfig.atmSSLDomainsLock;
+	delete uri_p;
 	if(_snd != nullptr)
 		delete _snd;
 }
@@ -220,10 +219,8 @@ bool WorkerThread::checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt)
 	struct tcphdr* tcph;
 	tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
 
-	if(m_WorkerConfig.atmSSLDomains != nullptr)
+	if(likely(m_WorkerConfig.atmSSLDomains != nullptr))
 	{
-		if(!m_WorkerConfig.atmSSLDomainsLock->tryLock())
-			return false;
 		if(m_WorkerConfig.lower_host)
 			std::transform(certificate.begin(), certificate.end(), certificate.begin(), ::tolower);
 		AhoCorasickPlus::Match match;
@@ -242,7 +239,6 @@ bool WorkerThread::checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt)
 			}
 			found=true;
 		}
-		m_WorkerConfig.atmSSLDomainsLock->unlock();
 		if(found)
 		{
 			m_ThreadStats.matched_ssl++;
@@ -265,134 +261,130 @@ bool WorkerThread::checkHTTP(std::string &uri, dpi_pkt_infos_t *pkt)
 	struct ipv6_hdr *ipv6_header = (struct ipv6_hdr *) pkt->pkt;
 	struct tcphdr* tcph;
 	tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
-	if(m_WorkerConfig.atm != nullptr)
+	if(likely(m_WorkerConfig.atm != nullptr))
 	{
-		if(m_WorkerConfig.atmLock->tryLock())
+		if(m_WorkerConfig.url_normalization)
 		{
-			if(m_WorkerConfig.url_normalization)
+			try
 			{
-				try
-				{
-					Poco::URI uri_p(uri);
-					uri_p.normalize();
-					uri.assign(uri_p.toString());
-				} catch (Poco::SyntaxException &ex)
-				{
-					_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
-				}
+				*uri_p = uri;
+				uri_p->normalize();
+				uri.assign(uri_p->toString());
+			} catch (Poco::SyntaxException &ex)
+			{
+				_logger.debug("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), uri);
 			}
-			if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
+		}
+		if(m_WorkerConfig.remove_dot || (!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host))
+		{
+			// remove dot after domain...
+			size_t f_slash_pos=uri.find('/',10);
+			if(!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host && f_slash_pos != std::string::npos)
 			{
-				// remove dot after domain...
-				size_t f_slash_pos=uri.find('/',10);
-				if(!m_WorkerConfig.url_normalization && m_WorkerConfig.lower_host && f_slash_pos != std::string::npos)
-				{
-					std::transform(uri.begin()+7, uri.begin()+f_slash_pos, uri.begin()+7, ::tolower);
-				}
-				if(m_WorkerConfig.remove_dot && f_slash_pos != std::string::npos)
-				{
-					if(uri[f_slash_pos-1] == '.')
-						uri.erase(f_slash_pos-1,1);
-				}
+				std::transform(uri.begin()+7, uri.begin()+f_slash_pos, uri.begin()+7, ::tolower);
 			}
-			AhoCorasickPlus::Match match;
-			bool found=false;
-			size_t uri_length=uri.length() - 7;
-			char const *uri_ptr=uri.c_str() + 7;
-			m_WorkerConfig.atm->search((char *)uri_ptr, uri_length, false);
-			while(m_WorkerConfig.atm->findNext(match) && !found)
+			if(m_WorkerConfig.remove_dot && f_slash_pos != std::string::npos)
 			{
-				if(match.pattern.ptext.length != uri_length)
+				if(uri[f_slash_pos-1] == '.')
+					uri.erase(f_slash_pos-1,1);
+			}
+		}
+		AhoCorasickPlus::Match match;
+		bool found=false;
+		size_t uri_length=uri.length() - 7;
+		char const *uri_ptr=uri.c_str() + 7;
+		m_WorkerConfig.atm->search((char *)uri_ptr, uri_length, false);
+		while(m_WorkerConfig.atm->findNext(match) && !found)
+		{
+			if(match.pattern.ptext.length != uri_length)
+			{
+				int r=match.position-match.pattern.ptext.length;
+				if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN)
 				{
-					int r=match.position-match.pattern.ptext.length;
-					if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN)
+					if(r > 0)
 					{
-						if(r > 0)
-						{
-							if(match.id & 0x01)
-								continue;
-							if(*(uri_ptr+r-1) != '.')
-								continue;
-						}
-					} else if(((match.id & 0x02) >> 1) == E_TYPE_URL)
-					{
-						if(m_WorkerConfig.match_url_exactly)
+						if(match.id & 0x01)
 							continue;
-						if(r > 0)
-						{
-							if(*(uri_ptr+r-1) != '.')
-								continue;
-						}
+						if(*(uri_ptr+r-1) != '.')
+							continue;
+					}
+				} else if(((match.id & 0x02) >> 1) == E_TYPE_URL)
+				{
+					if(m_WorkerConfig.match_url_exactly)
+						continue;
+					if(r > 0)
+					{
+						if(*(uri_ptr+r-1) != '.')
+							continue;
 					}
 				}
-				found=true;
 			}
-			m_WorkerConfig.atmLock->unlock();
-			if(found)
+			found=true;
+		}
+		if(found)
+		{
+			if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN) // block by domain...
 			{
-				if(((match.id & 0x02) >> 1) == E_TYPE_DOMAIN) // block by domain...
+				m_ThreadStats.matched_domains++;
+				if(m_WorkerConfig.http_redirect)
 				{
-					m_ThreadStats.matched_domains++;
-					if(m_WorkerConfig.http_redirect)
+					std::string add_param;
+					switch (m_WorkerConfig.add_p_type)
 					{
-						std::string add_param;
-						switch (m_WorkerConfig.add_p_type)
-						{
-							case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
-								break;
-							case A_TYPE_URL: add_param="url="+uri;
-								break;
-							default: break;
-						}
-						if(likely(_snd != nullptr))
-						{
-							_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
-						}
-						m_ThreadStats.redirected_domains++;
-					} else {
-						if(likely(_snd != nullptr))
-						{
-							_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-						}
-						m_ThreadStats.sended_rst++;
+						case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
+							break;
+						case A_TYPE_URL: add_param="url="+uri;
+							break;
+						default: break;
 					}
-					return true;
-				} else if(((match.id & 0x02) >> 1) == E_TYPE_URL) // block by url...
-				{
-					m_ThreadStats.matched_urls++;
-					if(m_WorkerConfig.http_redirect)
+					if(likely(_snd != nullptr))
 					{
-						std::string add_param;
-						switch (m_WorkerConfig.add_p_type)
-						{
-							case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
-								break;
-							case A_TYPE_URL: add_param="url="+uri;
-								break;
-							default: break;
-						}
-						if(likely(_snd != nullptr))
-						{
-							_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
-						}
-						m_ThreadStats.redirected_urls++;
+						_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
 					} else {
-						if(likely(_snd != nullptr))
-						{
-							_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
-						} else {
-							SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
-						}
-						m_ThreadStats.sended_rst++;
+						SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
 					}
-					return true;
+					m_ThreadStats.redirected_domains++;
+				} else {
+					if(likely(_snd != nullptr))
+					{
+						_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
+					} else {
+						SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+					}
+					m_ThreadStats.sended_rst++;
 				}
+				return true;
+			} else if(((match.id & 0x02) >> 1) == E_TYPE_URL) // block by url...
+			{
+				m_ThreadStats.matched_urls++;
+				if(m_WorkerConfig.http_redirect)
+				{
+					std::string add_param;
+					switch (m_WorkerConfig.add_p_type)
+					{
+						case A_TYPE_ID: add_param="id="+std::to_string(match.id >> 2);
+							break;
+						case A_TYPE_URL: add_param="url="+uri;
+							break;
+						default: break;
+					}
+					if(likely(_snd != nullptr))
+					{
+						_snd->Redirect(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str());
+					} else {
+						SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), 1, add_param.empty() ? nullptr : (char *)add_param.c_str()));
+					}
+					m_ThreadStats.redirected_urls++;
+				} else {
+					if(likely(_snd != nullptr))
+					{
+						_snd->SendRST(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0);
+					} else {
+						SenderTask::queue.enqueueNotification(new RedirectNotificationG(pkt->srcport, pkt->dstport, pkt->ip_version == 4 ? (void *)&ipv4_header->src_addr : (void *)&ipv6_header->src_addr, pkt->ip_version == 4 ? (void *)&ipv4_header->dst_addr : (void *)&ipv6_header->dst_addr, pkt->ip_version, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq, 0, nullptr, true));
+					}
+					m_ThreadStats.sended_rst++;
+				}
+				return true;
 			}
 		}
 	}
@@ -731,11 +723,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	// длина tcp заголовка
 	int tcphlen = tcphdr(l3+iphlen)->doff*4;
 
-	// общая длина всех заголовков
-	uint32_t hlen = iphlen + tcphlen;
-
 	payload_len = l4_packet_len - tcphlen;
-	uint8_t *payload = pkt_data_ptr + tcphlen;
 
 	m_ThreadStats.analyzed_packets++;
 
@@ -931,6 +919,12 @@ bool WorkerThread::run(uint32_t coreId)
 		SWAP_ACX(qconf->cur_acx_ipv4, qconf->new_acx_ipv4);
 		SWAP_ACX(qconf->cur_acx_ipv6, qconf->new_acx_ipv6);
 #undef SWAP_ACX
+
+		if(unlikely(m_WorkerConfig.atm_new != m_WorkerConfig.atm))
+			m_WorkerConfig.atm = m_WorkerConfig.atm_new;
+
+		if(unlikely(m_WorkerConfig.atmSSLDomains_new != m_WorkerConfig.atmSSLDomains))
+			m_WorkerConfig.atmSSLDomains = m_WorkerConfig.atmSSLDomains_new;
 
 		/*
 		 * Read packet from RX queues
