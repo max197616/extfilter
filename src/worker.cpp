@@ -189,7 +189,7 @@ WorkerThread::WorkerThread(const std::string& name, WorkerConfig &workerConfig, 
 	flows_pool = rte_mempool_create(mempool_name.c_str(), (fh->getHashSizeIPv4() + fh->getHashSizeIPv6()), sizeof(struct ext_dpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, socketid, 0);
 	if(flows_pool == nullptr)
 	{
-		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes", (int) ((fh->getHashSizeIPv4() + fh->getHashSizeIPv6())*sizeof(struct ext_dpi_flow_info)));
+		_logger.fatal("Not enough memory for flows pool. Tried to allocate %d bytes on socket %d", (int) ((fh->getHashSizeIPv4() + fh->getHashSizeIPv6())*sizeof(struct ext_dpi_flow_info)), socketid);
 		throw Poco::Exception("Not enough memory for flows pool");
 	}
 	if(mp != nullptr)

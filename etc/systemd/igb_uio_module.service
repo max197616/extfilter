@@ -2,7 +2,7 @@
 Description=igb_uio module insertion
 
 [Service]
-Type=one-shot
+Type=oneshot
 RemainAfterExit=yes
 # change that path for the one appropriate for you. Also keep in mind that Exec
 # paths must be absolute
