@@ -45,6 +45,10 @@ my $domains_ssl = $Config->{'APP.domains_ssl'} || "false";
 $domains_ssl = lc($domains_ssl);
 my $only_original_ssl_ip = $Config->{'APP.only_original_ssl_ip'} || "false";
 $only_original_ssl_ip = lc($only_original_ssl_ip);
+my $make_sp_chars = $Config->{'APP.make_sp_chars'} || "false";
+$make_sp_chars = lc($make_sp_chars);
+my $check_mask_domain = $Config->{'APP.check_mask_domain'} || "true";
+$check_mask_domain = lc($check_mask_domain);
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
 $dbh->do("set names utf8");
@@ -104,7 +108,7 @@ while (my $ips = $sth->fetchrow_hashref())
 }
 $sth->finish();
 
-$sth = $dbh->prepare("SELECT * FROM zap2_domains");
+$sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain not like '*.%'");
 $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
 {
@@ -114,13 +118,16 @@ while (my $ips = $sth->fetchrow_hashref())
 	$domain_canonical =~ s/\/$//;
 	$domain_canonical =~ s/\.$//;
 	my $skip = 0;
-	foreach my $dm (keys %masked_domains)
+	if($check_mask_domain eq "true")
 	{
-		if($domain_canonical =~ /\.\Q$dm\E$/ || $domain_canonical =~ /^\Q$dm\E$/)
+		foreach my $dm (keys %masked_domains)
 		{
-#			print "found mask $dm for domain $domain\n";
-			$skip++;
-			last;
+			if($domain_canonical =~ /^(.*\.)?\Q$dm\E$/)
+			{
+#				print "found mask $dm for domain $domain\n";
+				$skip++;
+				last;
+			}
 		}
 	}
 	next if($skip);
@@ -189,13 +196,16 @@ while (my $ips = $sth->fetchrow_hashref())
 
 	my $do=0;
 	my $skip = 0;
-	foreach my $dm (keys %masked_domains)
+	if($check_mask_domain eq "true")
 	{
-		if($host =~ /\.\Q$dm\E$/ || $host =~ /^\Q$dm\E$/)
+		foreach my $dm (keys %masked_domains)
 		{
-#			print "found mask $dm for domain $host\n";
-			$skip++;
-			last;
+			if($host =~ /^(.*\.)?\Q$dm\E$/)
+			{
+#				print "found mask $dm for domain $host\n";
+				$skip++;
+				last;
+			}
 		}
 	}
 	next if($skip);
@@ -279,10 +289,9 @@ while (my $ips = $sth->fetchrow_hashref())
 	insert_to_url($url11);
 	if($url2 ne $url11)
 	{
-#		print "insert original url $url2\n";
 		insert_to_url($url2);
 	}
-	make_special_chars($url11,$url1->as_iri(),$need_add_dot);
+	make_special_chars($url11,$url1->as_iri(),$need_add_dot) if($make_sp_chars eq "true");
 }
 $sth->finish();
 
