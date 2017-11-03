@@ -16,7 +16,6 @@ use Log::Log4perl;
 use Net::IP qw(:PROC);
 use Encode;
 
-
 binmode(STDOUT,':utf8');
 binmode(STDERR,':utf8');
 
@@ -47,8 +46,6 @@ my $only_original_ssl_ip = $Config->{'APP.only_original_ssl_ip'} || "false";
 $only_original_ssl_ip = lc($only_original_ssl_ip);
 my $make_sp_chars = $Config->{'APP.make_sp_chars'} || "false";
 $make_sp_chars = lc($make_sp_chars);
-my $check_mask_domain = $Config->{'APP.check_mask_domain'} || "true";
-$check_mask_domain = lc($check_mask_domain);
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
 $dbh->do("set names utf8");
@@ -85,9 +82,8 @@ my %ssl_hosts;
 my %ssl_ip;
 my %hosts;
 
-my $n_masked_domains = 0;
-my %masked_domains;
 my %domains;
+
 my $sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain like '*.%'");
 $sth->execute();
 while (my $ips = $sth->fetchrow_hashref())
@@ -98,8 +94,7 @@ while (my $ips = $sth->fetchrow_hashref())
 	$domain_canonical =~ s/^http\:\/\///;
 	$domain_canonical =~ s/\/$//;
 	$domain_canonical =~ s/\.$//;
-	$masked_domains{$domain_canonical} = 1;
-	$n_masked_domains++;
+	treeAddDomain(\%domains, "*.".$domain_canonical, 1);
 	print $DOMAINS_FILE "*.",$domain_canonical,"\n";
 	if($domains_ssl eq "true")
 	{
@@ -107,7 +102,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	}
 }
 $sth->finish();
-
 $sth = $dbh->prepare("SELECT * FROM zap2_domains WHERE domain not like '*.%'");
 $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
@@ -117,26 +111,8 @@ while (my $ips = $sth->fetchrow_hashref())
 	$domain_canonical =~ s/^http\:\/\///;
 	$domain_canonical =~ s/\/$//;
 	$domain_canonical =~ s/\.$//;
-	my $skip = 0;
-	if($check_mask_domain eq "true")
-	{
-		foreach my $dm (keys %masked_domains)
-		{
-			if($domain_canonical =~ /^(.*\.)?\Q$dm\E$/)
-			{
-#				print "found mask $dm for domain $domain\n";
-				$skip++;
-				last;
-			}
-		}
-	}
-	next if($skip);
-	if(defined $domains{$domain_canonical})
-	{
-		$logger->warn("Domain $domain_canonical already present in the domains list");
-		next;
-	}
-	$domains{$domain_canonical}=1;
+	next if(treeFindDomain(\%domains, $domain_canonical));
+	treeAddDomain(\%domains, $domain_canonical, 0);
 	$logger->debug("Canonical domain: $domain_canonical");
 	print $DOMAINS_FILE $domain_canonical."\n";
 	if($domains_ssl eq "true")
@@ -159,7 +135,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	}
 }
 $sth->finish();
-
 $sth = $dbh->prepare("SELECT * FROM zap2_urls");
 $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
@@ -188,6 +163,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		next;
 	}
 	my $host=lc($url1->host());
+	next if(treeFindDomain(\%domains, $host));
 	my $path=$url1->path();
 	my $query=$url1->query();
 	my $port=$url1->port();
@@ -195,25 +171,7 @@ while (my $ips = $sth->fetchrow_hashref())
 	$host =~ s/\.$//;
 
 	my $do=0;
-	my $skip = 0;
-	if($check_mask_domain eq "true")
-	{
-		foreach my $dm (keys %masked_domains)
-		{
-			if($host =~ /^(.*\.)?\Q$dm\E$/)
-			{
-#				print "found mask $dm for domain $host\n";
-				$skip++;
-				last;
-			}
-		}
-	}
-	next if($skip);
-	if($host !~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/ && $scheme ne 'https' && defined $domains{$host})
-	{
-#		$logger->warn("Host '$host' from url '$url2' present in the domains");
-		next;
-	}
+
 	if($scheme eq 'https')
 	{
 		if($host =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/ && !defined $hosts{"$host:$port"})
@@ -472,3 +430,49 @@ sub insert_to_url
 	$already_out{$sum}=1;
 	print $URLS_FILE (length($encoded) > 600 ? (substr($encoded,0,600)): "$encoded")."\n";
 }
+
+# Код от ixi
+sub treeAddDomain
+{
+	my ($tree, $domain, $masked) = @_;
+	my @d = split /\./, $domain;
+	my $cur = $tree;
+	my $prev;
+	while (my $part = pop @d )
+	{
+		$prev = $cur;
+		$cur = $prev->{$part};
+		if ($part eq '*') { # Заблокировано по маске
+			last;
+		} elsif (!$cur) {
+			$cur = $prev->{$part} = {};
+		}
+	}
+
+	if ($masked)
+	{
+		my $first = $domain;
+		$first =~ s/(\.).+$//;
+		$prev->{$first || $domain} = '*';
+	} else {
+		$cur->{'.'} = 1
+	}
+
+}
+
+sub treeFindDomain
+{
+	my ($tree, $domain) = @_;
+	my $r = $tree;
+
+	my @d = split /\./, $domain;
+
+	while (my $part = pop @d)
+	{
+		$r = $r->{$part};
+		return 0 unless $r;
+		return 1 if ($r && exists $r->{'*'});
+	}
+	return $r->{'.'} || 0;
+}
+
