@@ -635,7 +635,7 @@ void extFilter::initialize(Application& self)
 	_block_ssl_no_sni = config().getBool("block_ssl_no_sni", false);
 	_http_redirect = config().getBool("http_redirect", true);
 	_url_normalization = config().getBool("url_normalization", true);
-	_remove_dot = config().getBool("remove_dot", true);
+	_remove_dot = config().getBool("remove_dot", false);
 	_statistic_interval = config().getInt("statistic_interval", 0);
 	_urlsFile = config().getString("urllist","");
 	_domainsFile = config().getString("domainlist","");
