@@ -163,7 +163,7 @@ while (my $ips = $sth->fetchrow_hashref())
 		next;
 	}
 	my $host=lc($url1->host());
-	next if(treeFindDomain(\%domains, $host));
+	next if(($host !~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/ && $scheme ne 'https') && treeFindDomain(\%domains, $host));
 	my $path=$url1->path();
 	my $query=$url1->query();
 	my $port=$url1->port();
