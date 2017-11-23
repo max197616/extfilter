@@ -110,7 +110,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $domain_canonical=new URI("http://".$domain)->canonical();
 	$domain_canonical =~ s/^http\:\/\///;
 	$domain_canonical =~ s/\/$//;
-	$domain_canonical =~ s/\.$//;
 	next if(treeFindDomain(\%domains, $domain_canonical));
 	treeAddDomain(\%domains, $domain_canonical, 0);
 	$logger->debug("Canonical domain: $domain_canonical");
@@ -168,8 +167,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $query=$url1->query();
 	my $port=$url1->port();
 
-	$host =~ s/\.$//;
-
 	my $do=0;
 
 	if($scheme eq 'https')
@@ -214,10 +211,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	$url11 =~ s/^http\:\/\///;
 	$url2 =~ s/^http\:\/\///;
 
-	my $host_end=index($url2,'/',7);
-	my $need_add_dot=0;
-	$need_add_dot=1 if(substr($url2, $host_end-1 , 1) eq ".");
-
 	# убираем любое упоминание о фрагменте... оно не нужно
 	$url11 =~ s/^(.*)\#(.*)$/$1/g;
 	$url2 =~ s/^(.*)\#(.*)$/$1/g;
@@ -243,13 +236,12 @@ while (my $ips = $sth->fetchrow_hashref())
 
 	$url11 =~ s/\/\.$//;
 	$url2 =~ s/\/\.$//;
-	$url11 =~ s/\//\.\// if($need_add_dot);
 	insert_to_url($url11);
 	if($url2 ne $url11)
 	{
 		insert_to_url($url2);
 	}
-	make_special_chars($url11,$url1->as_iri(),$need_add_dot) if($make_sp_chars eq "true");
+	make_special_chars($url11,$url1->as_iri(), 0) if($make_sp_chars eq "true");
 }
 $sth->finish();
 
