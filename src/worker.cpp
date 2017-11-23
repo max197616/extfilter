@@ -746,7 +746,9 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 
 	dpi_identification_result_t r;
+
 	uri.clear();
+	certificate.clear();
 
 	r = identifyAppProtocol(l3, ip_len, timestamp, (uint8_t *)&((struct packet_info *)m->userdata)->keys, m->hash.usr);
 
@@ -758,7 +760,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	if(r.protocol.l7prot == DPI_PROTOCOL_TCP_SSL)
 	{
-		if(m_WorkerConfig.block_ssl_no_sni)
+		if(m_WorkerConfig.block_ssl_no_sni && certificate.empty())
 		{
 			if(acl_action == ACL::ACL_SSL && payload_len > 0)
 			{
