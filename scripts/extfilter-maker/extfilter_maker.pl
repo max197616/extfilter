@@ -93,7 +93,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	my $domain_canonical=new URI("http://".$dm)->canonical();
 	$domain_canonical =~ s/^http\:\/\///;
 	$domain_canonical =~ s/\/$//;
-	$domain_canonical =~ s/\.$//;
 	treeAddDomain(\%domains, "*.".$domain_canonical, 1);
 	print $DOMAINS_FILE "*.",$domain_canonical,"\n";
 	if($domains_ssl eq "true")
@@ -427,6 +426,7 @@ sub insert_to_url
 sub treeAddDomain
 {
 	my ($tree, $domain, $masked) = @_;
+	$domain .= "d" if(substr($domain, length($domain)-1, 1) eq '.');
 	my @d = split /\./, $domain;
 	my $cur = $tree;
 	my $prev;
@@ -456,9 +456,8 @@ sub treeFindDomain
 {
 	my ($tree, $domain) = @_;
 	my $r = $tree;
-
+	$domain .= "d" if(substr($domain, length($domain)-1, 1) eq '.');
 	my @d = split /\./, $domain;
-
 	while (my $part = pop @d)
 	{
 		$r = $r->{$part};
