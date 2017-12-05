@@ -17,7 +17,7 @@ use Net::IP qw(:PROC);
 use Encode;
 use Net::CIDR::Lite;
 use IPC::Open2;
-
+use LockFile::Simple qw(lock trylock unlock);
 
 binmode(STDOUT,':utf8');
 binmode(STDERR,':utf8');
@@ -30,6 +30,26 @@ Log::Log4perl::init( $dir."/extfilter_quagga_log.conf" );
 
 my $logger=Log::Log4perl->get_logger();
 
+my $send_mail = $Config->{'NOTIFY.send_mail'} || 0;
+$send_mail = lc($send_mail);
+my $notify_to = $Config->{'NOTIFY.to'} || "";
+my $notify_from = $Config->{'NOTIFY.from'} || "";
+my $lockfile = $Config->{'APP.lockfile'} || "/tmp/rkn.lock";
+
+if(!lock($lockfile))
+{
+	$logger->error("Process already running!");
+	print STDERR "Process already running!\n";
+	if(($send_mail eq "1" || $send_mail eq "true") && $notify_to ne "" && $notify_from ne "")
+	{
+		open(MAIL, "|/bin/mail -t");
+		print MAIL "To: $notify_to\n";
+		print MAIL "From: $notify_from\n";
+		print MAIL "Subject: BGP Alert!\n\n";
+		print MAIL "BGP maker process already running! Check it!\n\n";
+	}
+	exit 1;
+}
 
 my $db_host = $Config->{'DB.host'} || die "DB.host not defined.";
 my $db_user = $Config->{'DB.user'} || die "DB.user not defined.";
@@ -45,7 +65,6 @@ my $bgp_neighbor = $Config->{'BGP.neighbor'} || "";
 my $bgp_remote_as = $Config->{'BGP.remote_as'} || "";
 my $bgp6_neighbor = $Config->{'BGP.neighbor6'} || "";
 my $vtysh = $Config->{'BGP.vtysh'} || "/bin/vtysh";
-
 my $update_soft_quagga=1;
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
@@ -188,6 +207,9 @@ if(!$update_soft_quagga)
 	}
 }
 
+unlock($lockfile);
+
+exit 0;
 
 sub get_md5_sum
 {
