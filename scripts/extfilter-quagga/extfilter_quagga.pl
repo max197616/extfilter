@@ -379,7 +379,10 @@ sub analyse_quagga_networks
 		$outb=<$rdr>;
 		print $wtr "write mem\n";
 		$outb=<$rdr>;
+		print $wtr "exit\n";
+		$outb=<$rdr>;
 		close($wtr);
+		close($rdr);
 
 		waitpid( $pid, 0 );
 		my $child_exit_status = $? >> 8;
