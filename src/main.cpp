@@ -17,6 +17,8 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <sys/resource.h>
+#include <cmath>
 #include "worker.h"
 #include "main.h"
 #include "dpi.h"
@@ -1009,6 +1011,10 @@ int extFilter::main(const ArgVec& args)
 		sigemptyset(&handler.sa_mask);
 		sigaction(SIGHUP, &handler, NULL);
 
+		// core dumps maybe disallowed by parent of this process; change that
+		struct rlimit core_limits;
+		core_limits.rlim_cur = core_limits.rlim_max = RLIM_INFINITY;
+		setrlimit(RLIMIT_CORE, &core_limits);
 
 		if(initMemory(_nb_ports) < 0)
 		{
