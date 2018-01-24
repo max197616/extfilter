@@ -141,9 +141,8 @@ static inline void em_parse_ptype(struct rte_mbuf *m)
 				l3 += sizeof(struct vlan_hdr);
 			} else if(ether_type == 0x8847)
 			{
-				uint8_t bos;
-				bos = ((uint8_t *)eth_hdr)[2] & 0x1;
-				eth_hdr = rte_pktmbuf_mtod_offset(m, struct ether_hdr *,4);
+				uint8_t bos = ((uint8_t *)l3)[2] & 0x1;
+				l3 += 4;
 				if(bos)
 				{
 					ether_type = ETHER_TYPE_IPv4;
