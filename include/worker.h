@@ -1,3 +1,22 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
 #pragma once
 
 #include <vector>
@@ -8,25 +27,22 @@
 #include <Poco/Mutex.h>
 #include <Poco/HashMap.h>
 #include <Poco/Logger.h>
-#include <Poco/URI.h>
 #include <rte_hash.h>
 #include <api.h>
-#include "dtypes.h"
-#include "AhoCorasickPlus.h"
 #include "flow.h"
 #include "stats.h"
 #include "dpdk.h"
 #include "sender.h"
+#include "http.h"
 
-#define EXTF_GC_INTERVAL	1000 // us
-#define EXTF_ALL_GC_INTERVAL 1 // seconds
+//#define EXTF_GC_INTERVAL	1000 // us
+//#define EXTF_ALL_GC_INTERVAL 1 // seconds
 
-#define EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME 30 /** In seconds. **/
+//#define EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME 30 /** In seconds. **/
 
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
 
-#define URI_RESERVATION_SIZE 4096
 #define CERT_RESERVATION_SIZE 1024
 
 /* Configure how many packets ahead to prefetch, when reading packets */
@@ -37,45 +53,16 @@ class ESender;
 
 struct WorkerConfig
 {
-	uint32_t CoreId;
-
-	uint8_t port;
-	AhoCorasickPlus *atm;
-	AhoCorasickPlus *atm_new;
-	AhoCorasickPlus *atmSSLDomains;
-	AhoCorasickPlus *atmSSLDomains_new;
-
-	bool match_url_exactly;
-	bool lower_host;
 	bool block_ssl_no_sni;
-	bool http_redirect;
-	enum ADD_P_TYPES add_p_type;
-
-	bool url_normalization;
-	bool remove_dot;
-
 	bool notify_enabled;
 	NotifyManager *nm;
 
 	uint8_t sender_port;
 	uint16_t tx_queue_id;
 
-	uint16_t maximum_url_size;
-
 	WorkerConfig()
 	{
-		CoreId = RTE_MAX_LCORE+1;
-		atm = NULL;
-		atmSSLDomains = NULL;
-		atm_new = NULL;
-		atmSSLDomains_new = NULL;
-		match_url_exactly = false;
-		lower_host = false;
 		block_ssl_no_sni = false;
-		http_redirect = true;
-		add_p_type = A_TYPE_NONE;
-		url_normalization = true;
-		remove_dot = true;
 		notify_enabled = false;
 		nm = nullptr;
 	}
@@ -95,49 +82,33 @@ private:
 
 	dpi_library_state_t *dpi_state;
 
-	std::string uri;
-	std::string certificate;
-
 	bool analyzePacket(struct rte_mbuf* mBuf, uint64_t timestamp);
-	ext_dpi_flow_info *getFlow(uint8_t *host_key, uint64_t timestamp, int32_t *idx, uint32_t sig, dpi_pkt_infos_t *pkt_infos);
+
+//	bool analyzePacketIPv4(struct rte_mbuf* mBuf, uint64_t timestamp);
+
 	dpi_identification_result_t getAppProtocol(uint8_t *host_key, uint64_t timestamp, uint32_t sig, dpi_pkt_infos_t *pkt_infos);
 	dpi_identification_result_t identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig);
 
 	bool checkSSL();
 	std::string _name;
 	bool _need_block;
-	uint16_t _partition_id;
 
-	struct ext_dpi_flow_info **ipv4_flows;
-	struct ext_dpi_flow_info **ipv6_flows;
-
-	struct rte_mempool *flows_pool;
-
-	flowHash *m_FlowHash;
 	/// for sender through dpdk
 	int _n_send_pkts;
 	struct rte_mbuf* _sender_buf[EXTFILTER_WORKER_BURST_SIZE];
 	ESender *_snd;
-	struct rte_mempool *_url_mempool;
-	struct rte_mempool *_dpi_mempool;
-	Poco::URI *uri_p;
-public:
-	WorkerThread(const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, flowHash *fh, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *url_mempool, struct rte_mempool *dpi_mempool);
+	struct rte_mempool *_dpi_http_mempool;
 
+	uint8_t _worker_id;
+	uint32_t ipv4_flow_mask;
+	uint32_t ipv6_flow_mask;
+public:
+
+	WorkerThread(uint8_t worker_id, const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool);
 	~WorkerThread();
 
-	bool checkHTTP(std::string &uri, dpi_pkt_infos_t *pkt);
-	bool checkSSL(std::string &certificate, dpi_pkt_infos_t *pkt);
-
-	inline std::string &getUri()
-	{
-		return uri;
-	}
-
-	inline std::string &getCert()
-	{
-		return certificate;
-	}
+	bool checkURLBlocked(const char *host, size_t host_len, const char *uri, size_t uri_len, dpi_pkt_infos_t* pkt);
+	bool checkSNIBlocked(const char *sni, size_t sni_len, dpi_pkt_infos_t* pkt);
 
 	inline void setNeedBlock(bool b)
 	{
@@ -178,14 +149,22 @@ public:
 		m_ThreadStats.clear();
 	}
 
-	inline struct rte_mempool *getUrlMempool()
+	inline struct http::http_req_buf *allocateHTTPBuf()
 	{
-		return _url_mempool;
-	}
-	inline struct rte_mempool *getDPIMempool()
-	{
-		return _dpi_mempool;
+		struct http::http_req_buf *res;
+		if(rte_mempool_get(_dpi_http_mempool, (void **)&res) != 0)
+		{
+			_logger.error("Unable to allocate memory for the http buffer");
+			return nullptr;
+		}
+		res->init();
+		res->mempool = _dpi_http_mempool;
+		return res;
 	}
 
+	inline uint8_t getWorkerID()
+	{
+		return _worker_id;
+	}
 };
 

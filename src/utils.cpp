@@ -17,40 +17,33 @@
 *
 */
 
-#pragma once
+#include "utils.h"
 
-#include <Poco/Net/IPAddress.h>
-#include <Poco/HashMap.h>
-#include <map>
-#include <set>
-#include <vector>
+#include <ctype.h>
+static char hex_chars[]="0123456789ABCDEF";
 
-enum entry_types
+std::size_t url_encode(char *buf, const char *from, std::size_t len, std::size_t buf_size)
 {
-	E_TYPE_DOMAIN=0,
-	E_TYPE_URL
-};
-
-enum port_types
-{
-	P_TYPE_SUBSCRIBER,
-	P_TYPE_NETWORK,
-	P_TYPE_SENDER
-};
-
-struct entry_data
-{
-	uint32_t lineno;
-	entry_types type;
-	bool match_exactly;
-};
-
-
-typedef Poco::HashMap<unsigned int, struct entry_data> EntriesData;
-
-typedef Poco::HashMap<unsigned int,bool> DomainsMatchType;
-
-typedef std::map<Poco::Net::IPAddress,std::set<unsigned short>> IPPortMap;
-
-enum ADD_P_TYPES { A_TYPE_NONE, A_TYPE_ID, A_TYPE_URL };
-
+	std::size_t res = 0;
+	if(from)
+	{
+		while (*from != 0 && len > 0 && buf_size > 0)
+		{
+			res++;
+			buf_size--;
+			if(isalnum(*from) || *from == '-' || *from == '_' || *from == '.' || *from == '~')
+				*buf++ = *from;
+			else {
+				*buf++ = '%';
+				*buf++ = hex_chars[(*from >> 4) & 0x0f];
+				*buf++ = hex_chars[*from & 0x0f];
+				res += 2;
+				buf_size -= 2;
+			}
+			from++;
+			len--;
+		}
+	}
+	*buf = 0;
+	return res;
+}

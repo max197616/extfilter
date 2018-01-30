@@ -17,10 +17,8 @@
 *
 */
 
-#include "dtypes.h"
 #include "reloadtask.h"
 #include "main.h"
-#include "AhoCorasickPlus.h"
 #include "worker.h"
 #include "acl.h"
 
@@ -58,63 +56,11 @@ void ReloadTask::runTask()
 			} else {
 				_logger.information("ACLs successfully loaded");
 			}
-			for(std::vector<DpdkWorkerThread*>::iterator it=workerThreadVec.begin(); it != workerThreadVec.end(); it++)
+			if(_parent->getTriesManager()->getBLManager()->update())
 			{
-				if(dynamic_cast<WorkerThread*>(*it) == nullptr)
-					continue;
-				WorkerConfig& config=(static_cast<WorkerThread*>(*it))->getConfig();
-				AhoCorasickPlus *to_del_atm;
-				AhoCorasickPlus *atm_new;
-				if(!_parent->getSSLFile().empty())
-				{
-					atm_new = new AhoCorasickPlus();
-					try
-					{
-						_parent->loadDomains(_parent->getSSLFile(), atm_new);
-						atm_new->finalize();
-						to_del_atm = config.atmSSLDomains;
-						config.atmSSLDomains_new = atm_new;
-						rte_mb();
-						int cnt = 15;
-						do {
-							sleep(10);
-							--cnt;
-						} while (cnt > 0 && config.atmSSLDomains_new != config.atmSSLDomains);
-						if(cnt == 0)
-							_logger.warning("Something wrong with worker thread on core %u", (*it)->getCoreId());
-						delete to_del_atm;
-						_logger.information("Reloaded data for ssl domains list for core %u", (*it)->getCoreId());
-					} catch (Poco::Exception &excep)
-					{
-						_logger.error("Got exception while reload ssl data: %s", excep.displayText());
-						delete atm_new;
-					}
-				}
-				if(!_parent->getDomainsFile().empty() && !_parent->getURLsFile().empty())
-				{
-					atm_new = new AhoCorasickPlus();
-					try
-					{
-						_parent->loadDomainsURLs(_parent->getDomainsFile(), _parent->getURLsFile(), atm_new);
-						atm_new->finalize();
-						to_del_atm = config.atm;
-						config.atm_new = atm_new;
-						rte_mb();
-						int cnt = 15;
-						do {
-							sleep(10);
-							--cnt;
-						} while (cnt > 0 && config.atm_new != config.atm);
-						if(cnt == 0)
-							_logger.warning("Something wrong with worker thread on core %u", (*it)->getCoreId());
-						delete to_del_atm;
-						_logger.information("Reloaded data for domains and urls list for core %u", (*it)->getCoreId());
-					} catch (Poco::Exception &excep)
-					{
-						_logger.error("Got exception while reload domains and urls data: %s", excep.displayText());
-						delete atm_new;
-					}
-				}
+				_logger.error("Unable to update blacklists");
+			} else {
+				_logger.information("Blacklists successfully loaded");
 			}
 			for(auto it = to_del.begin(); it != to_del.end(); it++)
 			{

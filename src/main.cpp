@@ -21,17 +21,17 @@
 #include <cmath>
 #include "worker.h"
 #include "main.h"
-#include "dpi.h"
+#include "dtypes.h"
 #include <api.h>
 
-#include "AhoCorasickPlus.h"
-#include "sendertask.h"
+#include "cfg.h"
 #include "statistictask.h"
 #include "reloadtask.h"
 #include "acl.h"
 #include "cmdlinetask.h"
 #include "notification.h"
 #include "config.h"
+#include "tries.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -54,18 +54,27 @@ struct lcore_conf extFilter::_lcore_conf[RTE_MAX_LCORE];
 
 uint8_t sender_mac[6];
 
+const global_params_t *global_prm = nullptr; // основные параметры системы
+worker_params_t worker_params[MAX_WORKER_THREADS] __rte_cache_aligned; // параметры для worker'ов
+
+uint8_t m_RSSKey[40] = {
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
+};
+
 void flow_delete_cb(void* flow_specific_user_data)
 {
-	if(flow_specific_user_data)
+	if(flow_specific_user_data != nullptr)
 	{
-		struct dpi_flow_info *u = (struct dpi_flow_info *) flow_specific_user_data;
-		u->free_mem();
-		if(u->dpi_mempool == nullptr)
-			free(u);
-		else
-			rte_mempool_put(u->dpi_mempool, u);
+		struct http::http_req_buf *d = (struct http::http_req_buf *) flow_specific_user_data;
+		if(d->mempool != nullptr)
+			rte_mempool_put(d->mempool, d);
 	}
 }
+
 
 extFilter::extFilter(): _helpRequested(false),
 	_listDPDKPorts(false),
@@ -82,22 +91,118 @@ extFilter::extFilter(): _helpRequested(false),
 		memset(&_lcore_conf[i], 0, sizeof(lcore_conf));
 	}
 	_instance = this;
+	if(global_prm == nullptr)
+	{
+		global_prm = new global_params_t;
+	}
+	
 //	Poco::ErrorHandler::set(&_errorHandler);
 }
 
 
 extFilter::~extFilter()
 {
+	delete global_prm;
+}
+
+int _calc_scale(int scale, int min_val, int max_val)
+{
+	return min_val + (((double)scale - 1.0) / 9.0 * (double)(max_val - min_val) + 0.5);
+}
+
+int _calc_number_recs(int n_workers, int num_flows)
+{
+	int result = num_flows;
+	if ( n_workers != 1 )
+	{
+		if ( n_workers <= 3 )
+			result = num_flows / n_workers * 1.50; // +50 %
+		else
+			result = num_flows / n_workers * 1.25; // +25 % 
+	}
+	return result;
 }
 
 
-uint8_t m_RSSKey[40] = {
-	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
-	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
-	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
-	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
-	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
-};
+void extFilter::initParams()
+{
+	global_params_t *prm = (global_params_t *)global_prm;
+	memset(prm, 0, sizeof(global_params_t));
+
+	int scale = config().getInt("dpi.scale", 10);
+	if(scale < 1 && scale > 10)
+	{
+		throw Poco::Exception("scale must be between 1..10");
+	}
+
+	// flow params
+
+	prm->memory_configs.ipv4.flows_number = config().getInt("dpi.max_active_flows_ipv4", 0);
+	if(prm->memory_configs.ipv4.flows_number == 0)
+	{
+		prm->memory_configs.ipv4.flows_number = _calc_scale(scale, 500000, 10000000);
+	}
+
+	prm->memory_configs.ipv6.flows_number = config().getInt("dpi.max_active_flows_ipv6", 0);
+	if(prm->memory_configs.ipv6.flows_number == 0)
+	{
+		prm->memory_configs.ipv6.flows_number = _calc_scale(scale, 20000, 50000);
+	}
+
+	prm->frag_configs.ipv6.state = config().getBool("dpi.fragmentation_ipv6_state", true);
+	prm->frag_configs.ipv4.state = config().getBool("dpi.fragmentation_ipv4_state", true);
+
+	if(prm->frag_configs.ipv4.state)
+		prm->frag_configs.ipv4.table_size = config().getInt("dpi.fragmentation_ipv4_table_size", 512);
+	if(prm->frag_configs.ipv6.state)
+		prm->frag_configs.ipv6.table_size = config().getInt("dpi.fragmentation_ipv6_table_size", 512);
+
+	prm->tcp_reordering = config().getBool("dpi.tcp_reordering", true);
+
+
+	int parts_of_flow = config().getInt("dpi.parts_of_flow_ipv4", 0);
+	if(parts_of_flow == 0)
+	{
+		static int parts_of_flow_IPv4[11] = { 4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16 };
+		parts_of_flow = parts_of_flow_IPv4[scale];
+	}
+	if(parts_of_flow != 4 && parts_of_flow != 8 && parts_of_flow != 16)
+	{
+		throw Poco::Exception("parts_of_flow must be 4, 8 or 16");
+	}
+	prm->memory_configs.ipv4.parts_of_flow = parts_of_flow;
+
+	parts_of_flow = config().getInt("dpi.parts_of_flow_ipv6", 0);
+	if(parts_of_flow == 0)
+	{
+		static int parts_of_flow_IPv6[11] = { 2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8 };
+		parts_of_flow = parts_of_flow_IPv6[scale];
+	}
+	if(parts_of_flow != 2 && parts_of_flow != 4 && parts_of_flow != 8)
+	{
+		throw Poco::Exception("parts_of_flow must be 2, 4 or 8");
+	}
+	prm->memory_configs.ipv6.parts_of_flow = parts_of_flow;
+	// calc masks
+	prm->memory_configs.ipv6.mask_parts_flow = prm->memory_configs.ipv6.parts_of_flow - 1;
+	prm->memory_configs.ipv4.mask_parts_flow = prm->memory_configs.ipv4.parts_of_flow - 1;
+
+	prm->workers_number = _nb_lcore_params;
+
+	prm->memory_configs.ipv4.recs_number = _calc_number_recs(_nb_lcore_params, prm->memory_configs.ipv4.flows_number);
+	prm->memory_configs.ipv6.recs_number = _calc_number_recs(_nb_lcore_params, prm->memory_configs.ipv6.flows_number);
+
+	prm->flow_lifetime[0] = 30;
+	prm->flow_lifetime[1] = 300;
+
+	prm->memory_configs.http_entries = _calc_scale(scale, 70000, 250000);
+
+	prm->answer_duplication = config().getInt("answer_duplication", 0);
+	if(prm->answer_duplication > 3)
+	{
+		logger().warning("answer_duplication set to 3, it must be between 0 and 3");
+	}
+}
 
 static inline unsigned get_port_max_rx_queues(uint8_t port_id)
 {
@@ -225,8 +330,8 @@ int extFilter::initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_
 	portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME;
 	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
 	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
-	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
-	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
+	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
+	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IP;
 	portConf.txmode.mq_mode = ETH_MQ_TX_NONE;
 
 	retval = rte_eth_dev_configure(port, 1, nb_tx_queue, &portConf);
@@ -618,25 +723,61 @@ void extFilter::initialize(Application& self)
 {
 	loadConfiguration();
 	ServerApplication::initialize(self);
+/*
+	std::string fl("/usr/local/etc/extfilter/domains");
+	std::string ur("/usr/local/etc/extfilter/urls");
+	std::string sn("/usr/local/etc/extfilter/ssl_host");
 
-	_dpi_max_active_flows_ipv4 = config().getInt("dpi.max_active_flows_ipv4", 1000000);
-	_dpi_max_active_flows_ipv6 = config().getInt("dpi.max_active_flows_ipv6", 20000);
-	_dpi_fragmentation_ipv6_state = config().getBool("dpi.fragmentation_ipv6_state", true);
-	_dpi_fragmentation_ipv4_state = config().getBool("dpi.fragmentation_ipv4_state", true);
-	if(_dpi_fragmentation_ipv4_state)
-		_dpi_fragmentation_ipv4_table_size = config().getInt("dpi.fragmentation_ipv4_table_size", 512);
-	if(_dpi_fragmentation_ipv6_state)
-		_dpi_fragmentation_ipv6_table_size = config().getInt("dpi.fragmentation_ipv6_table_size", 512);
-	_dpi_tcp_reordering = config().getBool("dpi.tcp_reordering", true);
-	_dpi_maximum_url_size = config().getInt("dpi.max_url_size", 600);
+	const char *bl = "notify.tushino.com/blacklist";
+	if(_tries.getBLManager()->init(fl, ur, sn, bl, strlen(bl)))
+	{
+		std::cout << "error!" << std::endl;
+		exit(0);
+	}
+	std::cout << "everything is ok" << std::endl;
+
+	const char *host = "archive.is";
+	const char *uri = "/20150813064134/http://www.maxi24-az.com/ru/obyavlenie/amfetamin-skorost-89612877418-krasnodar-stimulyator-metamfetamin_1690872.html";
+
+	char *redir_url = nullptr;
+	int z = 0;
+	if((z=_tries.checkURLBlocked(0, host, strlen(host), uri, strlen(uri), &redir_url)))
+	{
+		std::cout << "URL is blocked" << std::endl;
+		if(redir_url)
+		{
+			std::cout << "redir to: " << redir_url << ", length: " << z << std::endl;
+		}
+	} else {
+		std::cout << "URL is not blocked" << std::endl;
+	}
+	exit(0);
+*/
+
+/*	std::string emp;
+	fl = "/usr/local/etc/extfilter/ssl_host";
+	_tries.getSNIBlacklist()->load(fl, emp);
+	if(_tries.checkSNIBlocked(0, host, strlen(host)))
+	{
+		std::cout << "SNI is blocked" << std::endl;
+	} else {
+		std::cout << "SNI is not blocked" << std::endl;
+	}
+*/
+
+/*#include "utils.h"
+	const char *b = "f\x09ucked";
+	char buf[4096];
+	url_encode(buf, b, strlen(b));
+	std::cout << "buf: '" << buf << "'" << std::endl;
+	
+	const char abc[]="abc";
+	std::cout << "size: " << sizeof(abc) << std::endl;
+*/
+//	exit(0);
 
 	_num_of_senders = config().getInt("num_of_senders", 1);
-	_lower_host = config().getBool("lower_host", false);
-	_match_url_exactly = config().getBool("match_url_exactly", false);
 	_block_ssl_no_sni = config().getBool("block_ssl_no_sni", false);
-	_http_redirect = config().getBool("http_redirect", true);
-	_url_normalization = config().getBool("url_normalization", true);
-	_remove_dot = config().getBool("remove_dot", false);
 	_statistic_interval = config().getInt("statistic_interval", 0);
 	_urlsFile = config().getString("urllist","");
 	_domainsFile = config().getString("domainlist","");
@@ -656,25 +797,11 @@ void extFilter::initialize(Application& self)
 		_sender_params.code=http_code;
 		logger().debug("HTTP code set to %s", http_code);
 	}
-	_sender_params.redirect_url=config().getString("redirect_url","");
+	std::string redirect_url = config().getString("redirect_url","");
+	_sender_params.redirect_url = redirect_url;
+	
 	_sender_params.send_rst_to_server=config().getBool("rst_to_server",false);
 	_sender_params.mtu=config().getInt("out_mtu",1500);
-
-	std::string add_p_type=config().getString("url_additional_info","none");
-	std::transform(add_p_type.begin(), add_p_type.end(), add_p_type.begin(), ::tolower);
-
-	std::map<std::string, ADD_P_TYPES> add_type_s;
-	add_type_s["none"]=A_TYPE_NONE;
-	add_type_s["line"]=A_TYPE_ID;
-	add_type_s["url"]=A_TYPE_URL;
-
-	std::map<std::string, ADD_P_TYPES>::iterator it=add_type_s.find(add_p_type);
-	if(it == add_type_s.end())
-	{
-		throw Poco::Exception("Unknown url_additional_info type '" + add_p_type + "'",404);
-	}
-	_add_p_type=it->second;
-	logger().debug("URL additional info set to %s", add_p_type);
 
 	_notify_enabled = config().getBool("notify_enabled", false);
 	_notify_acl_file = config().getString("notify_acl_file","");
@@ -793,7 +920,7 @@ void extFilter::initialize(Application& self)
 			{
 				if(cnt_sender > 0)
 				{
-					logger().fatal("Too many sender ports");
+					logger().fatal("Too many senders ports");
 					throw Poco::Exception("Congfiguration error");
 				}
 				++cnt_sender;
@@ -812,11 +939,10 @@ void extFilter::initialize(Application& self)
 			{
 				logger().fatal("Destination mac address not found for port %d", (int)i);
 				throw Poco::Exception("Congfiguration error");
-				
 			}
 			int last = 0;
 			int rc = sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx%n", sender_mac + 0, sender_mac + 1, sender_mac + 2, sender_mac + 3, sender_mac + 4, sender_mac + 5, &last);
-			if(rc != 6 || mac.size() != last)
+			if(rc != 6 || mac.size() != (std::size_t) last)
 			{
 				logger().fatal("Invalid mac address '%s' for port %d", mac, (int)i);
 				throw Poco::Exception("Congfiguration error");
@@ -830,7 +956,11 @@ void extFilter::initialize(Application& self)
 			throw Poco::Exception("Congfiguration error");
 		}
 		Poco::StringTokenizer restTokenizer(p, ";");
-		std::vector<int> lcores;
+		if(restTokenizer.count() > MAX_WORKER_THREADS)
+		{
+			logger().fatal("Exceeded max number of worker threads: %z", restTokenizer.count());
+			throw Poco::Exception("Configuration error");
+		}
 		int nb_lcores_per_port = 0;
 		for(auto itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
 		{
@@ -842,7 +972,6 @@ void extFilter::initialize(Application& self)
 				logger().fatal("Exceeded max number of lcore params: %d", (int) _nb_lcore_params);
 				throw Poco::Exception("Configuration error");
 			}
-			lcores.push_back(lcore_id);
 			_lcore_params_array[_nb_lcore_params].port_id = i;
 			_lcore_params_array[_nb_lcore_params].port_type = port_type;
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
@@ -858,8 +987,13 @@ void extFilter::initialize(Application& self)
 		throw Poco::Exception("Configuration error");
 	}
 
-//	_flowhash_size_per_worker=rte_align32pow2((_flowhash_size/_nb_lcore_params) * n_ports);
+	if(!cnt_sender)
+	{
+		logger().fatal("The senders port is not defined");
+		throw Poco::Exception("Configuration error");
+	}
 
+	initParams();
 
 	_nb_ports = rte_eth_dev_count();
 	if(_nb_ports == 0)
@@ -883,13 +1017,19 @@ void extFilter::initialize(Application& self)
 	// init acl
 
 	_acl = new ACL();
-	
+
 	if(loadACL())
 		throw Poco::Exception("Can't init ACL");
 
+
+	if(_tries.getBLManager()->init(_domainsFile, _urlsFile, _sslFile, redirect_url.empty() ? nullptr : redirect_url.c_str(), redirect_url.empty() ? 0 : redirect_url.length()))
+	{
+		logger().fatal("Unable to load blacklists");
+		throw Poco::Exception("Unable to load blacklists");
+	}
+
 	// init value...
 	_tsc_hz = rte_get_tsc_hz();
-
 }
 
 void extFilter::uninitialize()
@@ -1054,22 +1194,22 @@ int extFilter::main(const ArgVec& args)
 		WorkerConfig workerConfigArr[RTE_MAX_LCORE];
 
 		Poco::TaskManager tm;
-		if(_mp == nullptr)
+
+//		NotifyManager *nm = new NotifyManager(20000, _notify_groups);
+//		tm.start(nm);
+
+
+		std::string pool_name("DPIHTTPPool");
+		logger().information("Create pool '%s' for the http dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.http_entries, sizeof(http::http_req_buf),(uint64_t)(global_prm->memory_configs.http_entries * sizeof(http::http_req_buf)));
+		struct rte_mempool *dpi_http_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.http_entries, sizeof(http::http_req_buf), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
+		if(dpi_http_mempool == nullptr)
 		{
-			for(int i=1; i <= _num_of_senders; i++)
-			{
-				tm.start(new SenderTask(new CSender(_sender_params), i));
-			}
+			logger().fatal("Unable to create mempool for the http dissector.");
+				return Poco::Util::Application::EXIT_CONFIG;
 		}
 
-		NotifyManager *nm = new NotifyManager(20000, _notify_groups);
-		tm.start(nm);
-
-
-		int max_ipv4_flows_per_core = ceil((float)_dpi_max_active_flows_ipv4/(float)(_nb_lcore_params));
-		int max_ipv6_flows_per_core = ceil((float)_dpi_max_active_flows_ipv6/(float)(_nb_lcore_params));
-
-
+		initFlowStorages();
+		uint8_t worker_id = 0;
 		uint16_t tx_queue_id = 0;
 		/* launch per-lcore init on every lcore */
 		RTE_LCORE_FOREACH(lcore_id)
@@ -1077,35 +1217,12 @@ int extFilter::main(const ArgVec& args)
 			qconf = &_lcore_conf[lcore_id];
 			if (qconf->n_rx_queue != 0)
 			{
-				if(!_domainsFile.empty() && !_urlsFile.empty())
-				{
-					workerConfigArr[lcore_id].atm_new = new AhoCorasickPlus();
-					loadDomainsURLs(_domainsFile, _urlsFile, workerConfigArr[lcore_id].atm_new);
-					workerConfigArr[lcore_id].atm_new->finalize();
-				}
-				workerConfigArr[lcore_id].block_ssl_no_sni = _block_ssl_no_sni;
-				if(!_sslFile.empty())
-				{
-					workerConfigArr[lcore_id].atmSSLDomains_new = new AhoCorasickPlus();
-					loadDomains(_sslFile, workerConfigArr[lcore_id].atmSSLDomains_new);
-					workerConfigArr[lcore_id].atmSSLDomains_new->finalize();
-				}
-				workerConfigArr[lcore_id].match_url_exactly = _match_url_exactly;
-				workerConfigArr[lcore_id].lower_host = _lower_host;
-				workerConfigArr[lcore_id].http_redirect = _http_redirect;
-				workerConfigArr[lcore_id].url_normalization = _url_normalization;
-				workerConfigArr[lcore_id].remove_dot = _remove_dot;
-				workerConfigArr[lcore_id].add_p_type = _add_p_type;
-				workerConfigArr[lcore_id].notify_enabled = _notify_enabled;
-				workerConfigArr[lcore_id].nm = nm;
-				workerConfigArr[lcore_id].sender_port = _dpdk_send_port;
-				workerConfigArr[lcore_id].tx_queue_id = tx_queue_id;
-				workerConfigArr[lcore_id].maximum_url_size = _dpi_maximum_url_size;
+				workerConfigArr[worker_id].notify_enabled = _notify_enabled;
+//				workerConfigArr[worker_id].nm = nm;
+				workerConfigArr[worker_id].sender_port = _dpdk_send_port;
+				workerConfigArr[worker_id].tx_queue_id = tx_queue_id;
+				workerConfigArr[worker_id].block_ssl_no_sni = _block_ssl_no_sni;
 
-				logger().information("Initializing dpi flow hash with ipv4 max flows %d, ipv6  max flows %d.", max_ipv4_flows_per_core, max_ipv6_flows_per_core);
-				flowHash *mFlowHash = new flowHash(rte_lcore_to_socket_id(lcore_id), lcore_id, max_ipv4_flows_per_core, max_ipv6_flows_per_core);
-
-//				dpi_library_state_t* dpi_state = dpi_init_stateful(ipv4_buckets, ipv6_buckets, _dpi_max_active_flows_ipv4, _dpi_max_active_flows_ipv6);
 				dpi_library_state_t* dpi_state = dpi_init_stateless();
 				dpi_set_max_trials(dpi_state, 1);
 				dpi_inspect_nothing(dpi_state);
@@ -1118,28 +1235,24 @@ int extFilter::main(const ArgVec& args)
 				protocol.l7prot = DPI_PROTOCOL_TCP_SSL;
 				dpi_set_protocol(dpi_state, protocol);
 
-
 				dpi_set_flow_cleaner_callback(dpi_state, &flow_delete_cb);
 
-				if(!_dpi_tcp_reordering)
+				if(!global_prm->tcp_reordering)
 					dpi_tcp_reordering_disable(dpi_state);
 				else
 					dpi_tcp_reordering_enable(dpi_state);
 
-				if(_dpi_fragmentation_ipv4_state)
-					dpi_ipv4_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv4_table_size);
+				if(global_prm->frag_configs.ipv4.state)
+					dpi_ipv4_fragmentation_enable(dpi_state, global_prm->frag_configs.ipv4.table_size);
 				else
 					dpi_ipv4_fragmentation_disable(dpi_state);
 
-				if(_dpi_fragmentation_ipv6_state)
-					dpi_ipv6_fragmentation_enable(dpi_state, _dpi_fragmentation_ipv6_table_size);
+				if(global_prm->frag_configs.ipv6.state)
+					dpi_ipv6_fragmentation_enable(dpi_state, global_prm->frag_configs.ipv6.table_size);
 				else
 					dpi_ipv6_fragmentation_disable(dpi_state);
 
-
-
-
-				std::string workerName("WorkerThread-" + std::to_string(lcore_id));
+				std::string workerName("WorkerThrd_" + std::to_string(worker_id));
 				logger().debug("Preparing thread '%s'", workerName);
 				ESender::nparams prms;
 				if(_mp != nullptr)
@@ -1149,21 +1262,8 @@ int extFilter::main(const ArgVec& args)
 					prms.to_mac = &sender_mac[0];
 				}
 
-				struct rte_mempool *url_mempool = nullptr;
-				unsigned url_entries = (max_ipv4_flows_per_core+max_ipv6_flows_per_core)*PERCENT_URL_ENTRIES;
-				std::string pool_name("URLPool-" + std::to_string(lcore_id));
-				logger().information("Create pool '%s' for urls with number of entries: %d, size: %d bytes", pool_name, (int) url_entries, (int)(url_entries * (_dpi_maximum_url_size+1)));
-				url_mempool = rte_mempool_create(pool_name.c_str(), url_entries, _dpi_maximum_url_size+1, 0, 0, NULL, NULL, NULL, NULL, rte_lcore_to_socket_id(lcore_id), 0);
-				if(url_mempool == nullptr)
-					logger().warning("Unable to create mempool for url. Will be use malloc. This may affect performance.");
-				struct rte_mempool *dpi_mempool = nullptr;
-				pool_name.assign("DPIPool-" + std::to_string(lcore_id));
-				logger().information("Create pool '%s' for http dissector with number of entries: %d, size: %d bytes", pool_name, (int) url_entries, (int)(url_entries * sizeof(dpi_flow_info)));
-				dpi_mempool = rte_mempool_create(pool_name.c_str(), url_entries, sizeof(dpi_flow_info), 0, 0, NULL, NULL, NULL, NULL, rte_lcore_to_socket_id(lcore_id), 0);
-				if(dpi_mempool == nullptr)
-					logger().warning("Unable to create mempool for http dissector. Will be use malloc. This may affect performance.");
 
-				WorkerThread* newWorker = new WorkerThread(workerName, workerConfigArr[lcore_id], dpi_state, rte_lcore_to_socket_id(lcore_id), mFlowHash, prms, _mp, url_mempool, dpi_mempool);
+				WorkerThread* newWorker = new WorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, rte_lcore_to_socket_id(lcore_id), prms, _mp, dpi_http_mempool);
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)
@@ -1174,6 +1274,7 @@ int extFilter::main(const ArgVec& args)
 				_workerThreadVec.push_back(newWorker);
 				pthread_setname_np(lcore_config[lcore_id].thread_id, workerName.c_str());
 				tx_queue_id++;
+				worker_id++;
 			}
 		}
 
@@ -1188,6 +1289,7 @@ int extFilter::main(const ArgVec& args)
 		{
 			rte_eth_stats_reset(port_id);
 		}
+
 		waitForTerminationRequest();
 
 		for (auto iter = _workerThreadVec.begin(); iter != _workerThreadVec.end(); iter++)
@@ -1195,9 +1297,7 @@ int extFilter::main(const ArgVec& args)
 			(*iter)->stop();
 			rte_eal_wait_lcore((*iter)->getCoreId());
 		}
-
 		tm.cancelAll();
-		SenderTask::queue.wakeUpAll();
 		tm.joinAll();
 
 		for (uint8_t portid = 0; portid < _nb_ports; portid++)
@@ -1213,160 +1313,6 @@ int extFilter::main(const ArgVec& args)
 	return Poco::Util::Application::EXIT_OK;
 }
 
-void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm)
-{
-	logger().debug("Loading domains from file %s",domains);
-	Poco::FileInputStream df(domains);
-	int entry_id=0;
-	if(df.good())
-	{
-		int lineno=0;
-		while(!df.eof())
-		{
-			lineno++;
-			std::string str;
-			getline(df,str);
-			if(!str.empty())
-			{
-				if(str[0] == '#' || str[0] == ';')
-					continue;
-				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = lineno;
-				std::size_t pos = str.find("*.");
-				bool exact_match=true;
-				std::string insert=str;
-				patId <<= 2;
-				if(pos != std::string::npos)
-				{
-					exact_match=false;
-					insert=str.substr(pos+2,str.length()-2);
-				}
-				patId |= exact_match;
-				patId |= E_TYPE_DOMAIN << 1;
-				status = dm_atm->addPattern(insert, patId);
-				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
-				{
-					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
-					{
-						logger().warning("Pattern '%s' already present in the database from file %s",insert,domains);
-						continue;
-					} else {
-						logger().error("Failed to add '%s' from line %d from file %s",insert,lineno,domains);
-					}
-				}
-			}
-			entry_id++;
-		}
-	} else
-		throw Poco::OpenFileException(domains);
-	df.close();
-	logger().debug("Finish loading domains");
-	logger().debug("Loading URLS from file %s",urls);
-	Poco::FileInputStream uf(urls);
-	if(uf.good())
-	{
-		int lineno=0;
-		while(!uf.eof())
-		{
-			lineno++;
-			std::string str;
-			getline(uf,str);
-			if(!str.empty())
-			{
-				if(str[0] == '#' || str[0] == ';')
-					continue;
-				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = lineno;
-				if(_url_normalization)
-				{
-					std::string url = "http://" + str;
-					try
-					{
-						Poco::URI url_p(url);
-						url_p.normalize();
-						url.assign(url_p.toString());
-					} catch (Poco::SyntaxException &ex)
-					{
-						logger().error("An SyntaxException occured: '%s' on URI: '%s'", ex.displayText(), url);
-					}
-					str.assign(url.c_str()+7, url.length()-7);
-				}
-/*				std::string url = str;
-				std::size_t http_pos = url.find("http://");
-				if(http_pos == std::string::npos || http_pos > 0)
-				{
-					url.insert(0,"http://");
-				}*/
-				patId <<= 2;
-				patId |= 0;
-				patId |= E_TYPE_URL << 1;
-
-				status = dm_atm->addPattern(str, patId);
-				if (status != AhoCorasickPlus::RETURNSTATUS_SUCCESS)
-				{
-					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
-					{
-						logger().warning("Pattern '%s' already present in the URL database from file %s",str,urls);
-						continue;
-					} else {
-						logger().error("Failed to add '%s' from line %d from file %s",str,lineno,urls);
-					}
-				}
-			}
-			entry_id++;
-		}
-	} else
-		throw Poco::OpenFileException(urls);
-	uf.close();
-	logger().debug("Finish loading URLS");
-}
-
-void extFilter::loadDomains(std::string &fn, AhoCorasickPlus *dm_atm)
-{
-	logger().debug("Loading domains from file %s",fn);
-	Poco::FileInputStream df(fn);
-	if(df.good())
-	{
-		int lineno=1;
-		while(!df.eof())
-		{
-			std::string str;
-			getline(df,str);
-			if(!str.empty())
-			{
-				if(str[0] == '#' || str[0] == ';')
-					continue;
-				AhoCorasickPlus::EnumReturnStatus status;
-				AhoCorasickPlus::PatternId patId = lineno;
-				std::size_t pos = str.find("*.");
-				bool exact_match=true;
-				std::string insert=str;
-				if(pos != std::string::npos)
-				{
-					exact_match=false;
-					insert=str.substr(pos+2,str.length()-2);
-				}
-				patId <<= 2;
-				patId |= exact_match;
-				patId |= E_TYPE_DOMAIN << 1;
-				status = dm_atm->addPattern(insert, patId);
-				if (status!=AhoCorasickPlus::RETURNSTATUS_SUCCESS)
-				{
-					if(status == AhoCorasickPlus::RETURNSTATUS_DUPLICATE_PATTERN)
-					{
-						logger().warning("Pattern '%s' already present in the database from file %s",insert,fn);
-					} else {
-						logger().error("Failed to add '%s' from line %d from file %s",insert,lineno,fn);
-					}
-				}
-			}
-			lineno++;
-		}
-	} else
-		throw Poco::OpenFileException(fn);
-	df.close();
-	logger().debug("Finish loading domains");
-}
 
 bool extFilter::loadACL(std::set<struct rte_acl_ctx *> *to_del)
 {

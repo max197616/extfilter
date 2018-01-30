@@ -19,38 +19,23 @@
 
 #pragma once
 
-#include <Poco/Net/IPAddress.h>
-#include <Poco/HashMap.h>
-#include <map>
-#include <set>
-#include <vector>
+#include "params.h"
 
-enum entry_types
-{
-	E_TYPE_DOMAIN=0,
-	E_TYPE_URL
-};
+// maximum active threads
+#define MAX_WORKER_THREADS 10
 
-enum port_types
-{
-	P_TYPE_SUBSCRIBER,
-	P_TYPE_NETWORK,
-	P_TYPE_SENDER
-};
-
-struct entry_data
-{
-	uint32_t lineno;
-	entry_types type;
-	bool match_exactly;
-};
+#define MAX_REDIRECT_URL_SIZE 1189
 
 
-typedef Poco::HashMap<unsigned int, struct entry_data> EntriesData;
+const char r_line1[] = "HTTP/1.1 302 Moved Temporarily\r\n";
+const char r_line2[] = "Location: ";
+const char r_line3[] = "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+const char f_lines[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
 
-typedef Poco::HashMap<unsigned int,bool> DomainsMatchType;
+const char uri_p[] = "uri=http%3A%2F%2F";
 
-typedef std::map<Poco::Net::IPAddress,std::set<unsigned short>> IPPortMap;
+#define OUR_REDIR_SIZE (sizeof(r_line1) + sizeof(r_line2) + sizeof(r_line3) - 3)
+#define OUR_PAYLOAD_SIZE 1400
 
-enum ADD_P_TYPES { A_TYPE_NONE, A_TYPE_ID, A_TYPE_URL };
-
+extern const global_params_t *global_prm;
+extern worker_params_t worker_params[MAX_WORKER_THREADS];

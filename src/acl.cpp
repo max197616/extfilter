@@ -1,3 +1,24 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <Poco/FileStream.h>
 #include "acl.h"
 
@@ -61,7 +82,7 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 
 	acl_build_param.num_categories = DEFAULT_MAX_CATEGORIES;
 	acl_build_param.num_fields = dim;
-	memcpy(&acl_build_param.defs, ipv6 ? ipv6_defs : ipv4_defs,
+	rte_memcpy(&acl_build_param.defs, ipv6 ? ipv6_defs : ipv4_defs,
 	       ipv6 ? sizeof(ipv6_defs) : sizeof(ipv4_defs));
 
 	if (rte_acl_build(context, &acl_build_param) != 0)
@@ -261,7 +282,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 		int z = 0;
 		for(auto i=acl4_rules.begin(); i != acl4_rules.end(); i++)
 		{
-			memcpy((uint8_t *)ipv4_rules+z*sizeof(struct ACL::acl4_rule), &(*i), sizeof(struct ACL::acl4_rule));
+			rte_memcpy((uint8_t *)ipv4_rules+z*sizeof(struct ACL::acl4_rule), &(*i), sizeof(struct ACL::acl4_rule));
 			z++;
 		}
 	}
@@ -281,7 +302,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 		int z = 0;
 		for(auto i=acl6_rules.begin(); i != acl6_rules.end(); i++)
 		{
-			memcpy((uint8_t *)ipv6_rules+z*sizeof(struct ACL::acl6_rule), &(*i), sizeof(struct ACL::acl6_rule));
+			rte_memcpy((uint8_t *)ipv6_rules+z*sizeof(struct ACL::acl6_rule), &(*i), sizeof(struct ACL::acl6_rule));
 			z++;
 		}
 	}

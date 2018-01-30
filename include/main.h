@@ -1,13 +1,32 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
 #pragma once
 
 #include <Poco/Util/ServerApplication.h>
 #include <Poco/HashMap.h>
 #include <rte_common.h>
 #include <rte_memory.h>
-#include "dtypes.h"
 #include "sender.h"
 #include "worker.h"
 #include "notification.h"
+#include "tries.h"
 
 #define DEFAULT_MBUF_POOL_SIZE 8191
 #define MAX_RX_QUEUE_PER_LCORE 16
@@ -69,19 +88,12 @@ public:
 	void handleHelp(const std::string& name,const std::string& value);
 	void displayHelp();
 
+	void initParams();
+	void initFlowsIPv4();
+
 	/// Print DPDK ports
 	void printDPDKPorts(const std::string& name,const std::string& value);
 	int main(const ArgVec& args);
-
-	/**
-	    Load domains for blocking.
-	**/
-	void loadDomains(std::string &fn, AhoCorasickPlus *_dm_atm);
-
-	/**
-	    Load domains and urls into one database.
-	**/
-	void loadDomainsURLs(std::string &domains, std::string &urls, AhoCorasickPlus *dm_atm);
 
 	std::string &getSSLFile()
 	{
@@ -177,6 +189,11 @@ public:
 		return ne;
 	}
 
+	inline TriesManager *getTriesManager()
+	{
+		return &_tries;
+	}
+
 	static rte_mempool *packet_info_pool[NB_SOCKETS];
 
 	static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -203,27 +220,13 @@ private:
 	std::string _protocolsFile;
 	std::string _statisticsFile;
 
-	bool _lower_host;
-	bool _match_url_exactly;
 	bool _block_ssl_no_sni;
-	bool _http_redirect;
-	bool _url_normalization;
-	bool _remove_dot;
 
 	int _statistic_interval;
-	enum ADD_P_TYPES _add_p_type;
+
 	struct CSender::params _sender_params;
 	
 	static uint64_t _tsc_hz;
-	// DPI
-	uint32_t _dpi_max_active_flows_ipv4;
-	uint32_t _dpi_max_active_flows_ipv6;
-	bool _dpi_fragmentation_ipv6_state;
-	bool _dpi_fragmentation_ipv4_state;
-	uint16_t _dpi_fragmentation_ipv4_table_size;
-	uint16_t _dpi_fragmentation_ipv6_table_size;
-	bool _dpi_tcp_reordering;
-	uint16_t _dpi_maximum_url_size;
 
 	int _num_of_senders;
 
@@ -251,6 +254,7 @@ private:
 	int _cmdline_port;
 	Poco::Net::IPAddress _cmdline_ip;
 	uint8_t _dpdk_send_port;
+	TriesManager _tries;
 };
 
 
