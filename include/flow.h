@@ -252,7 +252,7 @@ class FlowStorage
 public:
 	struct cntrs
 	{
-		uint64_t alloc;
+		uint32_t alloc;
 		uint64_t free;
 		uint64_t reuse; // количество повторно использованных записей
 	} counters;
