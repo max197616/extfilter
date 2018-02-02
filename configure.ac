@@ -8,6 +8,7 @@ DPDK_HOME=
 DPDK_TARGET=
 
 PEAFOWL_HOME=./peafowl
+PEAFOWL_BRANCH=-b exp
 
 MARISA_HOME=./marisa
 
@@ -408,7 +409,7 @@ if test -d "$PEAFOWL_HOME" ; then :
 else
     AC_MSG_RESULT(not found)
     AC_MSG_NOTICE(Getting peafowl from git)
-    git clone https://github.com/max197616/Peafowl.git $PEAFOWL_HOME
+    git clone $PEAFOWL_BRANCH https://github.com/max197616/Peafowl.git $PEAFOWL_HOME
     AC_MSG_CHECKING(for peafowl $PEAFOWL_HOME)
     if test -d "$PEAFOWL_HOME" ; then :
 	AC_MSG_RESULT(found in $PEAFOWL_HOME)
@@ -434,6 +435,22 @@ AC_MSG_RESULT(yes)
 
 AC_SUBST(PEAFOWL_INCLUDE, $PEAFOWL_HOME/src)
 AC_SUBST(PEAFOWL_LIB, $PEAFOWL_LIB)
+
+dnl marisa-trie checks...
+AC_MSG_CHECKING(for marisa-trie $MARISA_HOME)
+if test -d "$MARISA_HOME" ; then :
+    AC_MSG_RESULT(found in $MARISA_HOME)
+else
+    AC_MSG_RESULT(not found)
+    AC_MSG_NOTICE(Getting marisa-trie from git)
+    git clone https://github.com/max197616/marisa-trie.git $MARISA_HOME
+    AC_MSG_CHECKING(for marisa-trie $MARISA_HOME)
+    if test -d "$MARISA_HOME" ; then :
+	AC_MSG_RESULT(found in $MARISA_HOME)
+    else
+	AC_MSG_ERROR(Install marisa-trie manually)
+    fi
+fi
 
 MARISA_LIB=$MARISA_HOME/lib/marisa/.libs/libmarisa.a
 AC_MSG_CHECKING(for $MARISA_LIB)
