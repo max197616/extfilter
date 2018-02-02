@@ -1,4 +1,4 @@
-AM_CPPFLAGS = -I$(DPDK_INCLUDE) -I$(top_srcdir)/$(PEAFOWL_INCLUDE) -I$(MARISA_INCLUDE)
+AM_CPPFLAGS = -I$(DPDK_INCLUDE) -I$(top_srcdir)/$(PEAFOWL_INCLUDE) -I$(top_srcdir)/$(MARISA_INCLUDE)
 
 LDADD =-lpcap -L $(DPDK_LIB) -lrt -lm -ldl $(top_srcdir)/$(PEAFOWL_LIB) $(MARISA_LIB)
 
