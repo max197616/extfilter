@@ -90,9 +90,9 @@ while (my $ips = $sth->fetchrow_hashref())
 {
 	my $dm = $ips->{domain};
 	$dm =~ s/\*\.//g;
-	my $domain_canonical=new URI("http://".$dm)->canonical();
-	$domain_canonical =~ s/^http\:\/\///;
-	$domain_canonical =~ s/\/$//;
+	$dm =~ s/\\//g;
+	my $uri = new URI("http://".$dm);
+	my $domain_canonical = lc($uri->host());
 	treeAddDomain(\%domains, "*.".$domain_canonical, 1);
 	print $DOMAINS_FILE "*.",$domain_canonical,"\n";
 	if($domains_ssl eq "true")
@@ -106,9 +106,9 @@ $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
 {
 	my $domain=$ips->{domain};
-	my $domain_canonical=new URI("http://".$domain)->canonical();
-	$domain_canonical =~ s/^http\:\/\///;
-	$domain_canonical =~ s/\/$//;
+	$domain =~ s/\\//g;
+	my $uri = new URI("http://".$domain);
+	my $domain_canonical = lc($uri->host());
 	next if(treeFindDomain(\%domains, $domain_canonical));
 	treeAddDomain(\%domains, $domain_canonical, 0);
 	$logger->debug("Canonical domain: $domain_canonical");
