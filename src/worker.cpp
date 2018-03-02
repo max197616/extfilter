@@ -461,7 +461,7 @@ dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint
 		{
 			node->cmn.blocked = true;
 		} else {
-			if(_need_block == false && pkt_infos->data_length > 0 && node->cmn.blocked)
+			if(pkt_infos->data_length > 0 && node->cmn.blocked)
 			{
 				switch (r.protocol.l7prot)
 				{
@@ -487,7 +487,7 @@ dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint
 		{
 			node_ipv6->cmn.blocked = true;
 		} else {
-			if(_need_block == false && pkt_infos->data_length > 0 && node_ipv6->cmn.blocked)
+			if(pkt_infos->data_length > 0 && node_ipv6->cmn.blocked)
 			{
 				switch (r.protocol.l7prot)
 				{
@@ -658,7 +658,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	{
 		if(m_WorkerConfig.block_ssl_no_sni)
 		{
-			if(acl_action == ACL::ACL_SSL && payload_len > 0)
+			if(acl_action == ACL::ACL_SSL)
 			{
 				m_ThreadStats.matched_ssl_ip++;
 				if(ip_version == 4)

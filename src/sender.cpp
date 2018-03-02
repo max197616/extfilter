@@ -78,15 +78,15 @@ void BSender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 		// Send the packet
 		if(Send((uint8_t *)&datagram, pkt_len,(struct sockaddr *)&sin, sizeof(sin)) < 0 )
 		{
-			Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
+			Poco::Net::IPAddress ipa(ip_to, sizeof(in_addr));
 			_logger.error("sendto() failed to %s:%d errno: %d",ipa.toString(), port_to, errno);
 		}
 	} else {
 		// Send the packet
 		if(Send((uint8_t *)&datagram, pkt_len, (struct sockaddr *)&sin6, sizeof(sin6)) < 0 )
 		{
-			Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
-			Poco::Net::IPAddress ipb(ip_from, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
+			Poco::Net::IPAddress ipa(ip_to, sizeof(in6_addr));
+			Poco::Net::IPAddress ipb(ip_from, sizeof(in6_addr));
 			_logger.error("sendto() failed to [%s]:%d from [%s]:%d errno: %d", ipa.toString(), ntohs(port_to), ipb.toString(), ntohs(port_from), errno);
 		}
 	}

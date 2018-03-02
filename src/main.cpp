@@ -130,7 +130,7 @@ void extFilter::initParams()
 	memset(prm, 0, sizeof(global_params_t));
 
 	int scale = config().getInt("dpi.scale", 10);
-	if(scale < 1 && scale > 10)
+	if(scale < 1 || scale > 10)
 	{
 		throw Poco::Exception("scale must be between 1..10");
 	}
@@ -609,7 +609,7 @@ int extFilter::_check_lcore_params(void)
 			logger().error("Lcore %d is not enabled in lcore mask", (int) lcore);
 			return -1;
 		}
-		if ((socketid = rte_lcore_to_socket_id(lcore) != 0) && (_numa_on == 0))
+		if ((socketid = rte_lcore_to_socket_id(lcore)) != 0 && _numa_on == 0)
 		{
 			logger().warning("Lcore %d is on socket %d with numa off", (int) lcore, (int) socketid);
 		}

@@ -86,8 +86,8 @@ static int compare_ipv6(const void *key1, const void *key2, size_t key_len)
 			   flow->proto == pkt_infos->proto);
 	else if(direction==2)
 		return !(flow->port_src == pkt_infos->port_dst &&
-			   flow->port_src == pkt_infos->port_dst &&
-			   flow->proto ==pkt_infos->proto);
+			   flow->port_dst == pkt_infos->port_src &&
+			   flow->proto == pkt_infos->proto);
 	else
 		return 1;
 

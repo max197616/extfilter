@@ -242,7 +242,6 @@ int TriesManager::checkURLBlocked(int thread_id, const char *hostname, uint32_t 
 	{
 		buf_len = sizeof(revhostname)-1;
 		host_len = sizeof(revhostname)-1;
-		host_len = sizeof(revhostname)-1;
 		url_entry = &url_buf[sizeof(revhostname)-1];
 		rhost = &revhostname[0];
 		uri_len = 0;
