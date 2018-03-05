@@ -812,7 +812,8 @@ void extFilter::initialize(Application& self)
 	_cmdline_port = config().getInt("cli_port", 0);
 	std::string cli_address = config().getString("cli_address", "");
 	if(!cli_address.empty() && _cmdline_port)
-		_cmdline_ip.parse(cli_address);
+		_cmdline_ip = Poco::Net::IPAddress::parse(cli_address);
+
 
 	int _mem_channels = config().getInt("memory_channels", 2);
 	
