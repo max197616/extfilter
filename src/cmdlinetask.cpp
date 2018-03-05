@@ -933,7 +933,7 @@ CmdLineTask::CmdLineTask(int port, Poco::Net::IPAddress &ip):
 		throw Poco::Exception("Setsockopt failed, error: %d", errno);
 
 	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = htonl(*(uint32_t *)ip.addr());
+	serv_addr.sin_addr.s_addr = *(uint32_t *)ip.addr();
 	serv_addr.sin_port = htons(_port);
 
 	if (::bind(_sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
