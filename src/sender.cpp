@@ -82,7 +82,7 @@ int BSender::makePacket(void *ip_from, void *ip_to, int ip_ver, int port_from, i
 	if(_logger.getLevel() == Poco::Message::PRIO_DEBUG)
 	{
 		Poco::Net::IPAddress ipa(ip_to, ip_ver == 4 ? sizeof(in_addr) : sizeof(in6_addr));
-		_logger.debug("Trying to send packet to %s port %d", ipa.toString(), port_to);
+		_logger.debug("Trying to send packet to %s port %hu", ipa.toString(), htons(port_to));
 	}
 	if(ip_ver == 4)
 	{
