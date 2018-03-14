@@ -8,7 +8,7 @@ DPDK_HOME=
 DPDK_TARGET=
 
 PEAFOWL_HOME=./peafowl
-PEAFOWL_BRANCH=-b exp
+PEAFOWL_BRANCH="-b exp"
 
 MARISA_HOME=./marisa
 
