@@ -21,6 +21,7 @@
 
 #include <api.h>
 #include <rte_mempool.h>
+#include "dtypes.h"
 
 namespace http {
 
@@ -37,7 +38,7 @@ struct http_rec
 	uint16_t length; // длина того, что находится в буфере.
 };
 
-struct http_req_buf
+struct http_req_buf : pool_holder_t
 {
 	char url_buf[600];
 	char host[255];
@@ -45,7 +46,6 @@ struct http_req_buf
 	struct http_rec host_r;
 	header_state h_state;
 	char h_prev_char;
-	struct rte_mempool *mempool;
 	inline void init()
 	{
 		uri.buf = &url_buf[0];

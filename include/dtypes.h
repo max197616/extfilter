@@ -19,18 +19,6 @@
 
 #pragma once
 
-#include <Poco/Net/IPAddress.h>
-#include <Poco/HashMap.h>
-#include <map>
-#include <set>
-#include <vector>
-
-enum entry_types
-{
-	E_TYPE_DOMAIN=0,
-	E_TYPE_URL
-};
-
 enum port_types
 {
 	P_TYPE_SUBSCRIBER,
@@ -38,19 +26,10 @@ enum port_types
 	P_TYPE_SENDER
 };
 
-struct entry_data
+struct rte_mempool;
+
+struct pool_holder_t
 {
-	uint32_t lineno;
-	entry_types type;
-	bool match_exactly;
+	rte_mempool *mempool;
 };
-
-
-typedef Poco::HashMap<unsigned int, struct entry_data> EntriesData;
-
-typedef Poco::HashMap<unsigned int,bool> DomainsMatchType;
-
-typedef std::map<Poco::Net::IPAddress,std::set<unsigned short>> IPPortMap;
-
-enum ADD_P_TYPES { A_TYPE_NONE, A_TYPE_ID, A_TYPE_URL };
 
