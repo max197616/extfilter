@@ -71,7 +71,7 @@ void flow_delete_cb(void* flow_specific_user_data)
 	{
 		struct pool_holder_t *d = (struct pool_holder_t *) flow_specific_user_data;
 		if(d->mempool != nullptr)
-			rte_mempool_put(d->mempool, d);
+			rte_mempool_put(d->mempool, flow_specific_user_data);
 	}
 }
 
