@@ -425,7 +425,18 @@ sub insert_to_url
 	my $sum = md5($encoded);
 	return if(defined $already_out{$sum});
 	$already_out{$sum}=1;
-	print $URLS_FILE (length($encoded) > 600 ? (substr($encoded,0,600)): "$encoded")."\n";
+	if(length($encoded) > 600)
+	{
+		$encoded = substr($encoded, 0, 600);
+		if(substr($encoded, length($encoded) - 1, 1) eq "%")
+		{
+			$encoded = substr($encoded, 0, length($encoded) -1);
+		} elsif (substr($encoded, length($encoded) - 2, 1) eq "%")
+		{
+			$encoded = substr($encoded, 0, length($encoded) - 2);
+		}
+	}
+	print $URLS_FILE $encoded."\n";
 }
 
 # Код от ixi
