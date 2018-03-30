@@ -263,6 +263,21 @@ bool WorkerThread::checkHTTP(std::string &uri, dpi_pkt_infos_t *pkt)
 	tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
 	if(likely(m_WorkerConfig.atm != nullptr))
 	{
+		if(uri.size() > m_WorkerConfig.maximum_url_size)
+		{
+			char last_char = uri[uri.size()-1];
+			char prev_last_char = uri[uri.size()-2];
+			if(last_char == '%')
+			{
+				uri.pop_back();
+			} else {
+				if(prev_last_char == '%')
+				{
+					uri.pop_back();
+					uri.pop_back();
+				}
+			}
+		}
 		if(m_WorkerConfig.url_normalization)
 		{
 			try
