@@ -447,7 +447,7 @@ sub treeAddDomain
 	my @d = split /\./, $domain;
 	my $cur = $tree;
 	my $prev;
-	while (my $part = pop @d )
+	while (defined(my $part = pop @d))
 	{
 		$prev = $cur;
 		$cur = $prev->{$part};
