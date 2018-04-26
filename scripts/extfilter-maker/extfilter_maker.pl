@@ -462,7 +462,7 @@ sub treeFindDomain
 	my $r = $tree;
 	$domain .= "d" if(substr($domain, length($domain)-1, 1) eq '.');
 	my @d = split /\./, $domain;
-	while (my $part = pop @d)
+	while (defined(my $part = pop @d))
 	{
 		$r = $r->{$part};
 		return 0 unless $r;
