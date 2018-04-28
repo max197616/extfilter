@@ -17,7 +17,7 @@ use Net::IP qw(:PROC);
 use Encode;
 use Net::CIDR::Lite;
 use IPC::Open2;
-use LockFile::Simple qw(lock trylock unlock);
+use Fcntl qw(LOCK_EX LOCK_NB);
 
 binmode(STDOUT,':utf8');
 binmode(STDERR,':utf8');
@@ -34,9 +34,8 @@ my $send_mail = $Config->{'NOTIFY.send_mail'} || 0;
 $send_mail = lc($send_mail);
 my $notify_to = $Config->{'NOTIFY.to'} || "";
 my $notify_from = $Config->{'NOTIFY.from'} || "";
-my $lockfile = $Config->{'APP.lockfile'} || "/tmp/rkn.lock";
 
-if(!lock($lockfile))
+if(!flock(DATA,LOCK_EX|LOCK_NB))
 {
 	$logger->error("Process already running!");
 	print STDERR "Process already running!\n";
@@ -65,6 +64,9 @@ my $bgp_neighbor = $Config->{'BGP.neighbor'} || "";
 my $bgp_remote_as = $Config->{'BGP.remote_as'} || "";
 my $bgp6_neighbor = $Config->{'BGP.neighbor6'} || "";
 my $vtysh = $Config->{'BGP.vtysh'} || "/bin/vtysh";
+my $route_to_null = (lc($Config->{'BGP.route_to_null'} || "true")) eq "true" ? 1 : 0;
+my $do_subnets = (lc($Config->{'BGP.do_subnets'} || "true")) eq "true" ? 1 : 0;
+
 my $update_soft_quagga=1;
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
@@ -122,32 +124,35 @@ while (my $ips = $sth->fetchrow_hashref())
 	next if($ip eq "0.0.0.0" || $ip eq "0000:0000:0000:0000:0000:0000:0000:0000");
 	if($ip =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
 	{
-		$ip_cidr_null->add_any($ip);
+		$ip_cidr_null->add_any($ip) if($route_to_null);
 		$ip_cidr->add_any($ip);
 	} else
 	{
-		$ip6_cidr_null->add_any($ip);
+		$ip6_cidr_null->add_any($ip) if($route_to_null);
 		$ip6_cidr->add_any($ip);
 	}
 }
 $sth->finish();
 
-$sth = $dbh->prepare("SELECT subnet FROM zap2_subnets");
-$sth->execute;
-while (my $ips = $sth->fetchrow_hashref())
+if($do_subnets)
 {
-	my $subnet = $ips->{subnet};
-	if($subnet =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
+	$sth = $dbh->prepare("SELECT subnet FROM zap2_subnets");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
 	{
-		$ip_cidr_null->add_any($subnet);
-		$ip_cidr->add_any($subnet);
-	} else
-	{
-		$ip6_cidr_null->add_any($subnet);
-		$ip6_cidr->add_any($subnet);
+		my $subnet = $ips->{subnet};
+		if($subnet =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
+		{
+			$ip_cidr_null->add_any($subnet) if($route_to_null);
+			$ip_cidr->add_any($subnet);
+		} else
+		{
+			$ip6_cidr_null->add_any($subnet) if($route_to_null);
+			$ip6_cidr->add_any($subnet);
+		}
 	}
+	$sth->finish();
 }
-$sth->finish();
 
 @ip_list=$ip_cidr->list();
 %ip_s = map { $_ => 1 } @ip_list;
@@ -206,8 +211,6 @@ if(!$update_soft_quagga)
 		}
 	}
 }
-
-unlock($lockfile);
 
 exit 0;
 
@@ -292,7 +295,7 @@ sub analyse_quagga_networks
 				}
 			}
 		}
-		if($line =~ /^ip\s+route\s+(.+)\/(\d+)/)
+		if($route_to_null && $line =~ /^ip\s+route\s+(.+)\/(\d+)/)
 		{
 			my $address=$1;
 			my $mask=$2;
@@ -395,3 +398,4 @@ sub analyse_quagga_networks
 	}
 }
 
+__DATA__
