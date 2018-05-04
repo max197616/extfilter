@@ -34,7 +34,7 @@
 static int param_num_tries = TRIES_NUMBER;
 static marisa::TailMode param_tail_mode = MARISA_TEXT_TAIL;
 static marisa::NodeOrder param_node_order = MARISA_WEIGHT_ORDER;
-static marisa::CacheLevel param_cache_level = MARISA_DEFAULT_CACHE;
+static marisa::CacheLevel param_cache_level = MARISA_LARGE_CACHE;
 
 bool Tries::search_prefix(marisa::Agent *agent, char *rhost, std::size_t rhost_size, char *url, std::size_t url_size)
 {
@@ -87,7 +87,7 @@ TriesControl::TriesControl():
 }
 
 
-int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *urls)
+int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *urls, bool is_domains = false)
 {
 	int lines = 0;
 	std::string line;
@@ -96,16 +96,29 @@ int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *ur
 		lines++;
 		if(line[0] == '#' || line[0] == ';')
 			continue;
-		std::size_t pos = line.find("*.");
-		if(pos != line.npos)
+		if(is_domains)
 		{
-			std::string s = line.substr(pos+1, line.length()-1);
-			urls->push_back(s.c_str()+1, s.length()-1); // store domain without previous dot
-			std::reverse(s.begin(), s.end());
-			m_domains->push_back(s.c_str(), s.length()); // store reverse
+			std::size_t pos = line.find("*.");
+			if(pos != line.npos)
+			{
+				std::string s = line.substr(pos+1, line.length()-1);
+				std::string s1(s.c_str()+1);
+				s1 += "/";
+				urls->push_back(s1.c_str(), s1.length()); // store domain without previous dot
+				std::reverse(s.begin(), s.end());
+				m_domains->push_back(s.c_str(), s.length()); // store reverse
+			} else {
+				if(is_domains)
+				{
+					std::string s(line.c_str());
+					s += "/";
+					urls->push_back(s.c_str(), s.length());
+				}
+			}
 		} else {
 			urls->push_back(line.c_str(), line.length());
 		}
+
 	}
 	return lines;
 }
@@ -136,7 +149,7 @@ bool TriesControl::load(std::string &domains_f, std::string &urls_f)
 					_logger.error("Failed to open domains file '%s'", domains_f);
 					return true;
 				}
-				domains_lines = read_keys(domains_file, &m_domains, &urls);
+				domains_lines = read_keys(domains_file, &m_domains, &urls, true);
 			} catch (const marisa::Exception &ex)
 			{
 				_logger.error("Working with domains failed: %s", std::string(ex.what()));
@@ -264,10 +277,8 @@ int TriesManager::checkURLBlocked(int thread_id, const char *hostname, uint32_t 
 	}
 	if(uri_len != 0)
 	{
-		if(uri_len == 1)
-			*url_entry = *uri;
-		else
-			rte_memcpy(url_entry, uri, uri_len);
+		for(uint32_t i = 0; i < uri_len; i++)
+			url_entry[i] = uri[i];
 	}
 	url_buf[buf_len] = 0;
 	try
@@ -277,19 +288,21 @@ int TriesManager::checkURLBlocked(int thread_id, const char *hostname, uint32_t 
 			struct BlacklistsManager::bl_service_profile *sp = _bl_manager.getActiveSP();
 			if(redir_url && sp->redir_url[0] != 0) // make redir url
 			{
-				char *r_url = &_url[thread_id][0];
 				int res = sp->redir_url_size;
-				rte_memcpy(r_url, sp->redir_url, res);
 				if(sp->need_add_url)
 				{
+					char *r_url = &_url[thread_id][0];
+					rte_memcpy(r_url, sp->redir_url, res);
 					size_t enc_len = url_encode(enc_url, url_buf, buf_len, sizeof(enc_url) - 1);
 					char *cptr = r_url + sp->redir_url_size;
 					res += sizeof(uri_p) - 1 + enc_len;
 					rte_memcpy(cptr, uri_p, sizeof(uri_p) - 1);
 					cptr += sizeof(uri_p) - 1;
 					rte_memcpy(cptr, enc_url, enc_len);
+					*redir_url = r_url;
+				} else {
+					*redir_url = sp->redir_url;
 				}
-				*redir_url = r_url;
 				return res;
 			}
 			return 1;
@@ -314,7 +327,6 @@ int TriesManager::checkSNIBlocked(int thread_id, const char *sni, uint32_t sni_l
 	}
 	try
 	{
-//		if(_bl_manager.getSNIBlacklist()->getActiveTrie()->search_prefix(&_agents[thread_id], (rptr+1), sni_len, (char *)sni, sni_len))
 		if(_bl_manager.getSNIBlacklist()->getActiveTrie()->lookup(&_agents[thread_id], (rptr+1), sni_len, (char *)sni, sni_len))
 		{
 			return 1;
