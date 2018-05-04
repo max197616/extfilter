@@ -1240,6 +1240,8 @@ void extFilter::loadDomainsURLs(std::string &domains, std::string &urls, AhoCora
 				{
 					exact_match=false;
 					insert=str.substr(pos+2,str.length()-2);
+				} else {
+					insert += "/";
 				}
 				patId |= exact_match;
 				patId |= E_TYPE_DOMAIN << 1;
