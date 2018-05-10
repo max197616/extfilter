@@ -63,7 +63,7 @@ class TriesControl
 public:
 	TriesControl();
 	~TriesControl() {};
-	bool load(std::string &domains, std::string &urls);
+	bool load(std::string &domains, std::string &urls, bool is_sni = false);
 
 	inline Tries *getActiveTrie()
 	{

@@ -123,7 +123,7 @@ int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *ur
 	return lines;
 }
 
-bool TriesControl::load(std::string &domains_f, std::string &urls_f)
+bool TriesControl::load(std::string &domains_f, std::string &urls_f, bool is_sni)
 {
 	marisa::Keyset m_domains;
 	marisa::Keyset urls;
@@ -149,7 +149,7 @@ bool TriesControl::load(std::string &domains_f, std::string &urls_f)
 					_logger.error("Failed to open domains file '%s'", domains_f);
 					return true;
 				}
-				domains_lines = read_keys(domains_file, &m_domains, &urls, true);
+				domains_lines = read_keys(domains_file, &m_domains, &urls, is_sni ? false : true);
 			} catch (const marisa::Exception &ex)
 			{
 				_logger.error("Working with domains failed: %s", std::string(ex.what()));
@@ -376,7 +376,7 @@ bool BlacklistsManager::init(std::string &_domains_file, std::string &_urls_file
 	fillProfile(0, _domains_file, _urls_file, _sni_file, redir_url, url_length);
 	_http_bl.load(_domains_file, _urls_file);
 	std::string empty_s;
-	_sni_bl.load(_sni_file, empty_s);
+	_sni_bl.load(_sni_file, empty_s, true);
 	_active_profile = 0;
 	return false;
 }
