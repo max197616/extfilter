@@ -386,5 +386,5 @@ bool BlacklistsManager::update()
 	if(_http_bl.load(_sp[_active_profile].domains_file, _sp[_active_profile].urls_file))
 		return true;
 	std::string empty_s;
-	return _sni_bl.load(_sp[_active_profile].sni_file, empty_s);
+	return _sni_bl.load(_sp[_active_profile].sni_file, empty_s, true);
 }
