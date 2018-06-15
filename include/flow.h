@@ -36,6 +36,7 @@
 
 #include "params.h"
 #include "arr.h"
+#include "dtypes.h"
 
 //#define _SIMPLE_HASH 1
 
@@ -77,6 +78,10 @@ struct flow_base_t
 			free(infos.tracking.ssl_information[0].pkt_buffer);
 		if(infos.tracking.ssl_information[1].pkt_buffer != nullptr)
 			free(infos.tracking.ssl_information[1].pkt_buffer);
+		if(infos.tracking.ssl_information[0].mempool != nullptr)
+			rte_mempool_put(((struct pool_holder_t*)infos.tracking.ssl_information[0].mempool)->mempool, infos.tracking.ssl_information[0].mempool);
+		if(infos.tracking.ssl_information[1].mempool != nullptr)
+			rte_mempool_put(((struct pool_holder_t*)infos.tracking.ssl_information[1].mempool)->mempool, infos.tracking.ssl_information[1].mempool);
 		infos.tracking.flow_specific_user_data = nullptr;
 		infos.tracking.http_informations[0].temp_buffer = nullptr;
 		infos.tracking.http_informations[1].temp_buffer = nullptr;

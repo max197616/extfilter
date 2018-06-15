@@ -20,6 +20,8 @@
 #pragma once
 
 #include <api.h>
+#include <rte_config.h>
+#include <rte_malloc.h>
 #include <rte_mempool.h>
 #include "dtypes.h"
 

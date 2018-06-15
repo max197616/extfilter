@@ -19,6 +19,9 @@
 
 #pragma once
 
+#include <rte_config.h>
+#include <rte_malloc.h>
+
 class FlowStorage;
 struct rte_mempool;
 class NotifyManager;
@@ -45,6 +48,7 @@ struct memory_configs_t
 	memory_config_t ipv4;
 	memory_config_t ipv6;
 	uint32_t http_entries;
+	uint32_t ssl_entries;
 };
 
 

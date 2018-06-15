@@ -35,6 +35,7 @@
 #include <rte_ethdev.h>
 #include <rte_atomic.h>
 #include <memory>
+#include <netinet/udp.h>
 
 #include "worker.h"
 #include "main.h"
@@ -46,6 +47,7 @@
 #include "utils.h"
 #include "http.h"
 #include "dtypes.h"
+#include "ssli.h"
 
 #define tcphdr(x)	((struct tcphdr *)(x))
 
@@ -67,14 +69,7 @@ int on_header_complete_ext(http_parser* p, dpi_pkt_infos_t* pkt_informations, vo
 	return 1; // no need to check body...
 }
 
-
-void ssl_cert_cb(char *certificate, int size, void *user_data, dpi_pkt_infos_t *pkt)
-{
-	WorkerThread *obj = (WorkerThread *) user_data;
-	obj->setNeedBlock(obj->checkSNIBlocked((const char *)certificate, size > 255 ? 255 : size, pkt));
-}
-
-WorkerThread::WorkerThread(uint8_t worker_id,const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool) :
+WorkerThread::WorkerThread(uint8_t worker_id,const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool, struct rte_mempool *dpi_ssl_mempool) :
 		m_WorkerConfig(workerConfig), m_Stop(true),
 		_logger(Poco::Logger::get(name)),
 		dpi_state(state),
@@ -90,8 +85,7 @@ WorkerThread::WorkerThread(uint8_t worker_id,const std::string& name, WorkerConf
 	};
 	dpi_http_activate_ext_callbacks(dpi_state, &ext_callbacks, this);
 
-	static dpi_ssl_callbacks_t ssl_callback = {.certificate_callback = ssl_cert_cb };
-	dpi_ssl_activate_callbacks(state, &ssl_callback, this);
+	dpi_ssl_activate_external_inspector(state, ssl_inspector, this);
 
 	ipv4_flow_mask = global_prm->memory_configs.ipv4.mask_parts_flow;
 	ipv6_flow_mask = global_prm->memory_configs.ipv6.mask_parts_flow;
@@ -104,6 +98,8 @@ WorkerThread::WorkerThread(uint8_t worker_id,const std::string& name, WorkerConf
 		throw Poco::Exception("ESender is null!");
 	}
 	_dpi_http_mempool = dpi_http_mempool;
+	_dpi_ssl_mempool = dpi_ssl_mempool;
+	_pkt_info_mempool = extFilter::getPktInfoPool();
 }
 
 WorkerThread::~WorkerThread()
@@ -168,12 +164,9 @@ bool WorkerThread::checkURLBlocked(const char *host, size_t host_len, const char
 	return false;
 }
 
-
-
 dpi_identification_result_t WorkerThread::identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig)
 {
 	dpi_identification_result_t r;
-	r.status = DPI_STATUS_OK;
 	dpi_pkt_infos_t infos = { 0 };
 	u_int8_t l3_status;
 
@@ -207,8 +200,6 @@ dpi_identification_result_t WorkerThread::identifyAppProtocol(const unsigned cha
 
 	return r;
 }
-
-
 
 dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint64_t timestamp, uint32_t sig, dpi_pkt_infos_t *pkt_infos)
 {
@@ -616,7 +607,9 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	m_ThreadStats.analyzed_packets++;
 
 	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
-	if(payload_len > 0 && acl_action == ACL::ACL_DROP)
+//	uint32_t acl_action = m->udata64 & ACL_POLICY_MASK;
+
+	if(unlikely(payload_len > 0 && acl_action == ACL::ACL_DROP))
 	{
 		m_ThreadStats.matched_ip_port++;
 		if(ip_version == 4)
@@ -768,7 +761,6 @@ bool WorkerThread::run(uint32_t coreId)
 		return true;
 	}
 
-//	m_CoreId = coreId;
 	m_Stop = false;
 	struct rte_mbuf *buf;
 
@@ -787,7 +779,6 @@ bool WorkerThread::run(uint32_t coreId)
 	for (int i = 0; i < qconf->n_rx_queue; i++)
 	{
 		portid = qconf->rx_queue_list[i].port_id;
-//		stats[lcore_id].port_id = portid;
 		queueid = qconf->rx_queue_list[i].queue_id;
 		_logger.information("-- lcoreid=%d portid=%d rxqueueid=%d", (int)lcore_id, (int)portid, (int)queueid);
 	}
@@ -828,11 +819,11 @@ bool WorkerThread::run(uint32_t coreId)
 
 			m_ThreadStats.total_packets += nb_rx;
 			// prefetch packets...
-			for(uint16_t i = 0; i < PREFETCH_OFFSET && i < nb_rx; i++)
+/*			for(uint16_t i = 0; i < PREFETCH_OFFSET && i < nb_rx; i++)
 			{
 				rte_prefetch0(rte_pktmbuf_mtod(bufs[i], void *));
 			}
-
+*/
 			struct ACL::acl_search_t acl_search;
 
 			prepare_acl_parameter(bufs, &acl_search, nb_rx);
@@ -844,6 +835,7 @@ bool WorkerThread::run(uint32_t coreId)
 				{
 					if(acl_search.res_ipv4[acli] != 0)
 					{
+//						acl_search.m_ipv4[acli]->udata64 = acl_search.res_ipv4[acli];
 						((struct packet_info *)acl_search.m_ipv4[acli]->userdata)->acl_res=acl_search.res_ipv4[acli];
 					}
 				}
@@ -855,15 +847,18 @@ bool WorkerThread::run(uint32_t coreId)
 				{
 					if(acl_search.res_ipv6[acli] != 0)
 					{
+//						acl_search.m_ipv6[acli]->udata64 = acl_search.res_ipv6[acli];
 						((struct packet_info *)acl_search.m_ipv6[acli]->userdata)->acl_res=acl_search.res_ipv6[acli];
 					}
 				}
 			}
 			uint64_t cycles = 0;
 			uint64_t blocked_cycles = 0;
+			uint64_t unblocked_cycles = 0;
 			for(uint16_t i = 0; i < nb_rx; i++)
 			{
 				buf = bufs[i];
+				rte_prefetch0(rte_pktmbuf_mtod(buf, void *));
 				if(likely(buf->userdata && port_type == P_TYPE_SUBSCRIBER))
 				{
 					bool need_block = analyzePacket(buf, last_sec);
@@ -872,14 +867,18 @@ bool WorkerThread::run(uint32_t coreId)
 					{
 						blocked_cycles += now - ((struct packet_info *)buf->userdata)->timestamp;
 						m_ThreadStats.latency_counters.blocked_pkts++;
+					} else {
+						unblocked_cycles += now - ((struct packet_info *)buf->userdata)->timestamp;
+						m_ThreadStats.latency_counters.unblocked_pkts++;
 					}
 					cycles += now - ((struct packet_info *)buf->userdata)->timestamp;
-					rte_mempool_put(extFilter::getPktInfoPool(), buf->userdata); // free packet_info
+					rte_mempool_put(_pkt_info_mempool, buf->userdata); // free packet_info
 				}
 				rte_pktmbuf_free(buf);
 			}
 			m_ThreadStats.latency_counters.total_cycles += cycles;
 			m_ThreadStats.latency_counters.blocked_cycles += blocked_cycles;
+			m_ThreadStats.latency_counters.unblocked_cycles += unblocked_cycles;
 			m_ThreadStats.latency_counters.total_pkts += nb_rx;
 			if(_n_send_pkts > 0)
 			{

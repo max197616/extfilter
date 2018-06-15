@@ -34,11 +34,7 @@
 #include "dpdk.h"
 #include "sender.h"
 #include "http.h"
-
-//#define EXTF_GC_INTERVAL	1000 // us
-//#define EXTF_ALL_GC_INTERVAL 1 // seconds
-
-//#define EXT_DPI_FLOW_TABLE_MAX_IDLE_TIME 30 /** In seconds. **/
+#include "ssl.h"
 
 #define EXTFILTER_CAPTURE_BURST_SIZE 32
 #define EXTFILTER_WORKER_BURST_SIZE 32
@@ -98,13 +94,15 @@ private:
 	struct rte_mbuf* _sender_buf[EXTFILTER_WORKER_BURST_SIZE];
 	ESender *_snd;
 	struct rte_mempool *_dpi_http_mempool;
+	struct rte_mempool *_dpi_ssl_mempool;
 
+	struct rte_mempool *_pkt_info_mempool;
 	uint8_t _worker_id;
 	uint32_t ipv4_flow_mask;
 	uint32_t ipv6_flow_mask;
 public:
 
-	WorkerThread(uint8_t worker_id, const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool);
+	WorkerThread(uint8_t worker_id, const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool, struct rte_mempool *dpi_ssl_mempool);
 	~WorkerThread();
 
 	bool checkURLBlocked(const char *host, size_t host_len, const char *uri, size_t uri_len, dpi_pkt_infos_t* pkt);
@@ -159,7 +157,32 @@ public:
 		}
 		res->init();
 		res->mempool = _dpi_http_mempool;
+		m_ThreadStats.dpi_alloc_http++;
 		return res;
+	}
+
+	inline struct rte_mempool *getHTTPMempool()
+	{
+		return _dpi_http_mempool;
+	}
+
+	inline struct ssl_state *allocateSSLState()
+	{
+		struct ssl_state *res;
+		if(rte_mempool_get(_dpi_ssl_mempool, (void **)&res) != 0)
+		{
+			_logger.error("Unable to allocate memory for the ssl buffer");
+			return nullptr;
+		}
+		res->init();
+		res->mempool = _dpi_ssl_mempool;
+		m_ThreadStats.dpi_alloc_ssl++;
+		return res;
+	}
+
+	inline struct rte_mempool *getSSLMempool()
+	{
+		return _dpi_ssl_mempool;
 	}
 
 	inline uint8_t getWorkerID()

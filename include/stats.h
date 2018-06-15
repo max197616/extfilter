@@ -19,12 +19,17 @@
 
 #pragma once
 
+#include <rte_config.h>
+#include <rte_malloc.h>
+
 struct LatencyCounters
 {
 	uint64_t total_cycles;
 	uint64_t total_pkts;
 	uint64_t blocked_cycles;
+	uint64_t unblocked_cycles;
 	uint64_t blocked_pkts;
+	uint64_t unblocked_pkts;
 };
 
 struct ThreadStats
@@ -45,6 +50,10 @@ struct ThreadStats
 	uint64_t reassembled_flows;
 	struct LatencyCounters latency_counters;
 	uint64_t dpi_no_mempool_http;
+	uint64_t dpi_no_mempool_ssl;
+	uint64_t dpi_ssl_partial_packets;
+	uint64_t dpi_alloc_ssl;
+	uint64_t dpi_alloc_http;
 
 	uint64_t ssl_packets;
 	uint64_t http_packets;
@@ -91,5 +100,5 @@ struct ThreadStats
 	{
 		memset(this, 0, sizeof(ThreadStats));
 	}
-};
+} __rte_cache_aligned;;
 

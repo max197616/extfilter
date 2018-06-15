@@ -321,6 +321,8 @@ public:
 		struct params params;
 		uint8_t *mac;
 		uint8_t *to_mac;
+		int answer_duplication;
+		struct rte_mempool *clone_pool;
 	};
 	ESender(struct nparams &params, uint8_t port, struct rte_mempool *mp, WorkerThread *wt);
 	~ESender();
@@ -332,8 +334,8 @@ public:
 		return size;
 	}
 
-	void sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh);
-	void sendPacketIPv6(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh);
+	void sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server = false);
+	void sendPacketIPv6(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server = false);
 	void HTTPRedirectIPv4(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum, bool f_psh, const char *redir_url, size_t r_len);
 	void HTTPRedirectIPv6(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum, bool f_psh, const char *redir_url, size_t r_len);
 	void SendRSTIPv4(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum);
@@ -345,7 +347,9 @@ private:
 	uint8_t _port;
 	struct ether_hdr _eth_hdr;
 	struct rte_mempool *_mp;
+	struct rte_mempool *_clone_pool;
 	WorkerThread *_wt;
+	int _answer_duplication;
 };
 
 #endif

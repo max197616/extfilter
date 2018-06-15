@@ -47,6 +47,7 @@ struct lcore_params {
 	uint8_t port_type;
 	uint8_t queue_id;
 	uint8_t lcore_id;
+	uint8_t mapto;
 } __rte_cache_aligned;
 
 struct lcore_rx_queue {
@@ -228,8 +229,6 @@ private:
 	
 	static uint64_t _tsc_hz;
 
-	int _num_of_senders;
-
 	int _numa_on;
 	uint32_t _enabled_port_mask;
 
@@ -255,6 +254,7 @@ private:
 	Poco::Net::IPAddress _cmdline_ip;
 	uint8_t _dpdk_send_port;
 	TriesManager _tries;
+	operation_modes _operation_mode;
 };
 
 

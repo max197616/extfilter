@@ -44,14 +44,10 @@ int on_url_ext (http_parser *p, const char* at, size_t length, dpi_pkt_infos_t* 
 			length = d->uri.buf_size - d->uri.length;
 		if(likely(length > 0))
 		{
-			if(d->uri.length != 0)
-			{
-				rte_memcpy(d->uri.buf + d->uri.length, at, length);
-				d->uri.length += length;
-			} else {
-				rte_memcpy(d->uri.buf, at, length);
-				d->uri.length = length;
-			}
+			for(size_t i = 0; i < length; i++)
+				d->uri.buf[d->uri.length++] = at[i];
+//			rte_memcpy(d->uri.buf + d->uri.length, at, length);
+//			d->uri.length += length;
 		}
 	}
 	return 0;
@@ -108,17 +104,10 @@ int on_header_value_ext(http_parser *p, const char *at, size_t length, dpi_pkt_i
 			case http::hstate_host:
 				if(d->host_r.length + length > d->host_r.buf_size)
 					length = d->host_r.buf_size - d->host_r.length;
-				if(length > 0)
-				{
-					if(d->host_r.length != 0)
-					{
-						rte_memcpy(d->host_r.buf + d->host_r.length, at, length);
-						d->host_r.length += length;
-					} else {
-						rte_memcpy(d->host_r.buf, at, length);
-						d->host_r.length = length;
-					}
-				}
+				for(size_t i = 0; i < length; i++)
+					d->host_r.buf[d->host_r.length++] = at[i];
+//				rte_memcpy(d->host_r.buf + d->host_r.length, at, length);
+//				d->host_r.length += length;
 				break;
 			default:
 				break;

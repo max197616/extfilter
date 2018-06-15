@@ -26,6 +26,12 @@ enum port_types
 	P_TYPE_SENDER
 };
 
+enum operation_modes
+{
+	OP_MODE_MIRROR,
+	OP_MODE_INLINE
+};
+
 struct rte_mempool;
 
 struct pool_holder_t

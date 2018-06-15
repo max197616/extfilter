@@ -225,7 +225,9 @@ int DSender::Send(uint8_t *buffer, int size, void *addr, int addr_size)
 ESender::ESender(struct nparams &prm, uint8_t port, struct rte_mempool *mp, WorkerThread *wt) : BSender("ESender", prm.params),
 	_port(port),
 	_mp(mp),
-	_wt(wt)
+	_clone_pool(prm.clone_pool),
+	_wt(wt),
+	_answer_duplication(prm.answer_duplication)
 {
 	rte_memcpy(&_eth_hdr.s_addr, prm.mac, 6);
 	rte_memcpy(&_eth_hdr.d_addr, prm.to_mac, 6);
@@ -274,7 +276,8 @@ void ESender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 	return;
 }
 
-void ESender::sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh)
+
+void ESender::sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server)
 {
 	struct rte_mbuf *pkt = rte_pktmbuf_alloc(_mp);
 	if(unlikely(pkt == nullptr))
@@ -291,12 +294,26 @@ void ESender::sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t se
 	ether_addr_copy(&_eth_hdr.d_addr, &eth_hdr->d_addr);
 	eth_hdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
 	struct ipv4_hdr *ip_hdr = (struct ipv4_hdr *) pkt_buf;
+/*	ip_hdr->hdr_checksum = 0;
+	pkt->ol_flags |= PKT_TX_IPV4 | PKT_TX_IP_CKSUM;*/
 	ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
 
 	if(likely(_wt->_n_send_pkts < EXTFILTER_WORKER_BURST_SIZE))
 	{
-		_wt->_sender_buf[_wt->_n_send_pkts] = pkt;
-		_wt->_n_send_pkts++;
+		if(!to_server && _answer_duplication > 0 && _wt->_n_send_pkts+_answer_duplication < EXTFILTER_WORKER_BURST_SIZE)
+		{
+			for(uint8_t z = 0; z < _answer_duplication; z++)
+			{
+				struct rte_mbuf *clone = rte_pktmbuf_clone(pkt, _clone_pool);
+				if(clone != nullptr)
+					_wt->_sender_buf[_wt->_n_send_pkts++] = clone;
+				else {
+					_logger.error("Unable to create clone packet.");
+					break;
+				}
+			}
+		}
+		_wt->_sender_buf[_wt->_n_send_pkts++] = pkt;
 	} else {
 		_logger.error("Can't send packet. Buffer is full.");
 		rte_pktmbuf_free(pkt);
@@ -305,7 +322,7 @@ void ESender::sendPacketIPv4(const uint8_t *l3_pkt, uint32_t acknum, uint32_t se
 	return;
 }
 
-void ESender::sendPacketIPv6(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh)
+void ESender::sendPacketIPv6(const uint8_t *l3_pkt, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server)
 {
 	struct rte_mbuf *pkt = rte_pktmbuf_alloc(_mp);
 	if(unlikely(pkt == nullptr))
@@ -324,8 +341,20 @@ void ESender::sendPacketIPv6(const uint8_t *l3_pkt, uint32_t acknum, uint32_t se
 
 	if(likely(_wt->_n_send_pkts < EXTFILTER_WORKER_BURST_SIZE))
 	{
-		_wt->_sender_buf[_wt->_n_send_pkts] = pkt;
-		_wt->_n_send_pkts++;
+		if(!to_server && _answer_duplication > 0 && _wt->_n_send_pkts+_answer_duplication < EXTFILTER_WORKER_BURST_SIZE)
+		{
+			for(uint8_t z = 0; z < _answer_duplication; z++)
+			{
+				struct rte_mbuf *clone = rte_pktmbuf_clone(pkt, _clone_pool);
+				if(clone != nullptr)
+					_wt->_sender_buf[_wt->_n_send_pkts++] = clone;
+				else {
+					_logger.error("Unable to create clone packet.");
+					break;
+				}
+			}
+		}
+		_wt->_sender_buf[_wt->_n_send_pkts++] = pkt;
 	} else {
 		_logger.error("Can't send packet. Buffer is full.");
 		rte_pktmbuf_free(pkt);
@@ -341,36 +370,26 @@ void ESender::HTTPRedirectIPv4(const uint8_t *pkt, uint32_t acknum, uint32_t seq
 	const char *payload_ptr = f_lines;
 	if(redir_url != nullptr && r_len + OUR_REDIR_SIZE < OUR_PAYLOAD_SIZE)
 	{
-		rte_memcpy(payload, r_line1, sizeof(r_line1)-1);
-		rte_memcpy(payload + sizeof(r_line1) - 1, r_line2, sizeof(r_line2) -1);
+		memcpy(payload, r_line1, sizeof(r_line1)-1);
+		memcpy(payload + sizeof(r_line1) - 1, r_line2, sizeof(r_line2) -1);
 		rte_memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 , redir_url, r_len);
-		rte_memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + r_len, r_line3, sizeof(r_line3) - 1);
+		memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + r_len, r_line3, sizeof(r_line3) - 1);
 		payload_size = sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + sizeof(r_line3) - 1 + r_len;
 		payload_ptr = payload;
 	}
 	sendPacketIPv4(pkt, acknum, seqnum, payload_ptr, payload_size, false, f_psh);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv4(pkt, acknum, seqnum, payload_ptr, payload_size, false, f_psh);
-	}
 //	sendPacketIPv4(pkt, rte_cpu_to_be_32(rte_be_to_cpu_32(acknum) + payload_size), 0, nullptr, 0, true, false); // send rst...
 	// And reset session with server, if needed
 	if(_parameters.send_rst_to_server)
-		this->sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, 1, 0);
+		this->sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, 1, 0, true);
 }
 
 void ESender::HTTPForbiddenIPv4(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum, bool f_psh)
 {
 	sendPacketIPv4(pkt, acknum, seqnum, f_lines, sizeof(f_lines)-1, 0, f_psh);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv4(pkt, acknum, seqnum, f_lines, sizeof(f_lines)-1, 0, f_psh);
-	}
 	// And reset session with server, if needed
 	if(_parameters.send_rst_to_server)
-		this->sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, 1, 0);
+		this->sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, 1, 0, true);
 }
 
 void ESender::HTTPRedirectIPv6(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum, bool f_psh, const char *redir_url, size_t r_len)
@@ -380,36 +399,26 @@ void ESender::HTTPRedirectIPv6(const uint8_t *pkt, uint32_t acknum, uint32_t seq
 	const char *payload_ptr = f_lines;
 	if(redir_url != nullptr && r_len + OUR_REDIR_SIZE < OUR_PAYLOAD_SIZE)
 	{
-		rte_memcpy(payload, r_line1, sizeof(r_line1)-1);
-		rte_memcpy(payload + sizeof(r_line1) - 1, r_line2, sizeof(r_line2) -1);
+		memcpy(payload, r_line1, sizeof(r_line1)-1);
+		memcpy(payload + sizeof(r_line1) - 1, r_line2, sizeof(r_line2) -1);
 		rte_memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 , redir_url, r_len);
-		rte_memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + r_len, r_line3, sizeof(r_line3) - 1);
+		memcpy(payload + sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + r_len, r_line3, sizeof(r_line3) - 1);
 		payload_size = sizeof(r_line1) - 1 + sizeof(r_line2) - 1 + sizeof(r_line3) - 1 + r_len;
 		payload_ptr = payload;
 	}
 	sendPacketIPv6(pkt, acknum, seqnum, payload_ptr, payload_size, false, f_psh);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv6(pkt, acknum, seqnum, payload_ptr, payload_size, false, f_psh);
-	}
 //	sendPacketIPv6(pkt, rte_cpu_to_be_32(rte_be_to_cpu_32(acknum) + payload_size), 0, nullptr, 0, true, false); // send rst...
 	// And reset session with server, if needed
 	if(_parameters.send_rst_to_server)
-		sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, 1, 0);
+		sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, 1, 0, true);
 }
 
 void ESender::HTTPForbiddenIPv6(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum, bool f_psh)
 {
 	sendPacketIPv6(pkt, acknum, seqnum, f_lines, sizeof(f_lines)-1, 0, f_psh);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv6(pkt, acknum, seqnum, f_lines, sizeof(f_lines)-1, 0, f_psh);
-	}
 	// And reset session with server, if needed
 	if(_parameters.send_rst_to_server)
-		this->sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, 1, 0);
+		this->sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, 1, 0, true);
 }
 
 
@@ -417,26 +426,16 @@ void ESender::SendRSTIPv4(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum)
 {
 	// send rst to the client
 	sendPacketIPv4(pkt, acknum, seqnum, nullptr, 0, true, false);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv4(pkt, acknum, seqnum, nullptr, 0, true, false);
-	}
 	// send rst to the server
 	if(_parameters.send_rst_to_server)
-		sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, true, false);
+		sendPacketIPv4(pkt, seqnum, acknum, nullptr, 0, true, false, true);
 }
 
 void ESender::SendRSTIPv6(const uint8_t *pkt, uint32_t acknum, uint32_t seqnum)
 {
 	// send rst to the client
 	sendPacketIPv6(pkt, acknum, seqnum, nullptr, 0, true, false);
-	if(global_prm->answer_duplication > 0)
-	{
-		for(uint8_t z = 0; z < global_prm->answer_duplication; z++)
-			sendPacketIPv6(pkt, acknum, seqnum, nullptr, 0, true, false);
-	}
 	// send rst to the server
 	if(_parameters.send_rst_to_server)
-		sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, true, false);
+		sendPacketIPv6(pkt, seqnum, acknum, nullptr, 0, true, false, true);
 }

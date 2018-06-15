@@ -188,7 +188,13 @@ void StatisticTask::OutStatistic()
 			app.logger().information("Thread matched by ip/port: %" PRIu64 ", ssl SNI: %" PRIu64 ", ssl/ip: %" PRIu64 ", http IPv4: %" PRIu64 ", http IPv6: %" PRIu64, stats.matched_ip_port, stats.matched_ssl_sni, stats.matched_ssl_ip, stats.matched_http_bl_ipv4, stats.matched_http_bl_ipv6);
 			app.logger().information("Thread redirected blocked http IPv4: %" PRIu64 ", redirected http IPv6: %" PRIu64 ", sended forbidden IPv4: %" PRIu64 ", sended forbidden IPv6: %" PRIu64 ", rst sended IPv4: %" PRIu64 ", rst sended IPv6: %" PRIu64, stats.redirected_http_bl_ipv4, stats.redirected_http_bl_ipv6, stats.sended_forbidden_ipv4, stats.sended_forbidden_ipv6, stats.sended_rst_ipv4, stats.sended_rst_ipv6);
 			if(stats.latency_counters.blocked_pkts != 0 && stats.latency_counters.total_pkts != 0)
-				app.logger().information("Thread packets latency all packets: %" PRIu64 " cycles (%.0f ns), blocked packets: %" PRIu64 " (%.0f ns)", (stats.latency_counters.total_cycles / stats.latency_counters.total_pkts), cycles_to_ns(stats.latency_counters.total_cycles / stats.latency_counters.total_pkts),  (stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts), cycles_to_ns(stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts));
+				app.logger().information("Thread packets latency all packets: %" PRIu64 " cycles (%.0f ns), unblocked packets: %" PRIu64 " cycles (%.0f ns), blocked packets: %" PRIu64 " (%.0f ns)",
+							 (stats.latency_counters.total_cycles / stats.latency_counters.total_pkts),
+							 cycles_to_ns(stats.latency_counters.total_cycles / stats.latency_counters.total_pkts),
+							 (stats.latency_counters.unblocked_cycles / stats.latency_counters.unblocked_pkts),
+							 cycles_to_ns(stats.latency_counters.unblocked_cycles / stats.latency_counters.unblocked_pkts),
+							 (stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts), 
+							 cycles_to_ns(stats.latency_counters.blocked_cycles / stats.latency_counters.blocked_pkts));
 			if(!_statisticsFile.empty())
 			{
 				std::string worker_name("worker.core."+std::to_string(core));

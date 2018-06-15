@@ -32,6 +32,7 @@
 #include "notification.h"
 #include "config.h"
 #include "tries.h"
+#include "ssli.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -140,7 +141,7 @@ void extFilter::initParams()
 	prm->memory_configs.ipv4.flows_number = config().getInt("dpi.max_active_flows_ipv4", 0);
 	if(prm->memory_configs.ipv4.flows_number == 0)
 	{
-		prm->memory_configs.ipv4.flows_number = _calc_scale(scale, 500000, 10000000);
+		prm->memory_configs.ipv4.flows_number = _calc_scale(scale, 500000, 20000000);
 	}
 
 	prm->memory_configs.ipv6.flows_number = config().getInt("dpi.max_active_flows_ipv6", 0);
@@ -196,6 +197,7 @@ void extFilter::initParams()
 	prm->flow_lifetime[1] = 300;
 
 	prm->memory_configs.http_entries = _calc_scale(scale, 70000, 250000);
+	prm->memory_configs.ssl_entries = _calc_scale(scale, 120000, 360000);
 
 	prm->answer_duplication = config().getInt("answer_duplication", 0);
 	if(prm->answer_duplication > 3)
@@ -279,6 +281,7 @@ static inline void em_parse_ptype(struct rte_mbuf *m)
 			packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
 	}
 	m->packet_type = packet_type;
+//	m->udata64 = ACL::ACL_DEFAULT_POLICY;
 	struct packet_info *pkt_info;
 	if(rte_mempool_get(extFilter::getPktInfoPool(), (void **)&pkt_info) != 0)
 	{
@@ -723,85 +726,31 @@ void extFilter::initialize(Application& self)
 {
 	loadConfiguration();
 	ServerApplication::initialize(self);
-/*
-	std::string fl("/usr/local/etc/extfilter/domains");
-	std::string ur("/usr/local/etc/extfilter/urls");
-	std::string sn("/usr/local/etc/extfilter/ssl_host");
 
-	const char *bl = "notify.tushino.com/blacklist";
-	if(_tries.getBLManager()->init(fl, ur, sn, bl, strlen(bl)))
-	{
-		std::cout << "error!" << std::endl;
-		exit(0);
-	}
-	std::cout << "everything is ok" << std::endl;
-
-	const char *host = "archive.is";
-	const char *uri = "/20150813064134/http://www.maxi24-az.com/ru/obyavlenie/amfetamin-skorost-89612877418-krasnodar-stimulyator-metamfetamin_1690872.html";
-
-	char *redir_url = nullptr;
-	int z = 0;
-	if((z=_tries.checkURLBlocked(0, host, strlen(host), uri, strlen(uri), &redir_url)))
-	{
-		std::cout << "URL is blocked" << std::endl;
-		if(redir_url)
-		{
-			std::cout << "redir to: " << redir_url << ", length: " << z << std::endl;
-		}
-	} else {
-		std::cout << "URL is not blocked" << std::endl;
-	}
-	exit(0);
-*/
-
-/*	std::string emp;
-	fl = "/usr/local/etc/extfilter/ssl_host";
-	_tries.getSNIBlacklist()->load(fl, emp);
-	if(_tries.checkSNIBlocked(0, host, strlen(host)))
-	{
-		std::cout << "SNI is blocked" << std::endl;
-	} else {
-		std::cout << "SNI is not blocked" << std::endl;
-	}
-*/
-
-/*#include "utils.h"
-	const char *b = "f\x09ucked";
-	char buf[4096];
-	url_encode(buf, b, strlen(b));
-	std::cout << "buf: '" << buf << "'" << std::endl;
-	
-	const char abc[]="abc";
-	std::cout << "size: " << sizeof(abc) << std::endl;
-*/
-//	exit(0);
-
-	_num_of_senders = config().getInt("num_of_senders", 1);
 	_block_ssl_no_sni = config().getBool("block_ssl_no_sni", false);
 	_statistic_interval = config().getInt("statistic_interval", 0);
 	_urlsFile = config().getString("urllist","");
 	_domainsFile = config().getString("domainlist","");
-	_sslIpsFile = config().getString("sslips","");
-	if(!_block_ssl_no_sni)
+	if(_block_ssl_no_sni)
 	{
-		_sslIpsFile.assign("");
+		_sslIpsFile = config().getString("sslips","");
 	}
 	_sslFile = config().getString("ssllist","");
 	_hostsFile = config().getString("hostlist","");
 	_statisticsFile = config().getString("statisticsfile","");
 
-	std::string http_code=config().getString("http_code","");
+	std::string http_code = config().getString("http_code","");
 	if(!http_code.empty())
 	{
 		http_code.erase(std::remove(http_code.begin(), http_code.end(), '"'), http_code.end());
-		_sender_params.code=http_code;
+		_sender_params.code = http_code;
 		logger().debug("HTTP code set to %s", http_code);
 	}
 	std::string redirect_url = config().getString("redirect_url","");
 	_sender_params.redirect_url = redirect_url;
 	
-	_sender_params.send_rst_to_server=config().getBool("rst_to_server",false);
-	_sender_params.mtu=config().getInt("out_mtu",1500);
+	_sender_params.send_rst_to_server = config().getBool("rst_to_server",false);
+	_sender_params.mtu = config().getInt("out_mtu",1500);
 
 	_notify_enabled = config().getBool("notify_enabled", false);
 	_notify_acl_file = config().getString("notify_acl_file","");
@@ -817,8 +766,14 @@ void extFilter::initialize(Application& self)
 
 	int _mem_channels = config().getInt("memory_channels", 2);
 	
-	int coreMaskToUse=config().getInt("core_mask", 0);
+	int coreMaskToUse = config().getInt("core_mask", 0);
 
+	std::string operation_mode = config().getString("operation_mode","mirror");
+	_operation_mode = OP_MODE_MIRROR;
+	if(operation_mode == "inline")
+	{
+		_operation_mode = OP_MODE_INLINE;
+	}
 
 	// initialize DPDK
 	std::stringstream dpdkParamsStream;
@@ -904,6 +859,8 @@ void extFilter::initialize(Application& self)
 
 	_nb_lcore_params=0;
 	int cnt_sender = 0;
+	int networks_ports = 0;
+	int subscribers_ports = 0;
 	for(uint32_t i=0; i < n_ports; i++)
 	{
 		std::string key("port "+std::to_string(i));
@@ -915,8 +872,10 @@ void extFilter::initialize(Application& self)
 			if(type == "network")
 			{
 				port_type = P_TYPE_NETWORK;
+				networks_ports++;
 			} else if (type == "subscriber")
 			{
+				subscribers_ports++;
 			} else if (type == "sender")
 			{
 				if(cnt_sender > 0)
@@ -950,7 +909,7 @@ void extFilter::initialize(Application& self)
 			}
 			continue;
 		}
-		std::string p=config().getString(key+".queues", "");
+		std::string p = config().getString(key+".queues", "");
 		if(p.empty())
 		{
 			logger().fatal("Port IDs are not sequential (port %d missing)", (int) i);
@@ -961,6 +920,16 @@ void extFilter::initialize(Application& self)
 		{
 			logger().fatal("Exceeded max number of worker threads: %z", restTokenizer.count());
 			throw Poco::Exception("Configuration error");
+		}
+		uint8_t mapto = 255;
+		if(_operation_mode == OP_MODE_INLINE)
+		{
+			mapto = config().getInt(key + ".mapto", 255);
+			if(mapto == 255)
+			{
+				logger().fatal("In the inline operation mode 'mapto' must be defined int the port %d", (int) i);
+				throw Poco::Exception("Configuration error");
+			}
 		}
 		int nb_lcores_per_port = 0;
 		for(auto itr=restTokenizer.begin(); itr!=restTokenizer.end(); ++itr)
@@ -977,6 +946,7 @@ void extFilter::initialize(Application& self)
 			_lcore_params_array[_nb_lcore_params].port_type = port_type;
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
 			_lcore_params_array[_nb_lcore_params].lcore_id = lcore_id;
+			_lcore_params_array[_nb_lcore_params].mapto = mapto;
 			_nb_lcore_params++;
 			nb_lcores_per_port++;
 		}
@@ -988,10 +958,26 @@ void extFilter::initialize(Application& self)
 		throw Poco::Exception("Configuration error");
 	}
 
-	if(!cnt_sender)
+	if(_operation_mode == OP_MODE_MIRROR && !cnt_sender)
 	{
-		logger().fatal("The senders port is not defined");
+		logger().fatal("The senders port is not defined in the mirror operation mode");
 		throw Poco::Exception("Configuration error");
+	}
+
+	if(_operation_mode == OP_MODE_INLINE)
+	{
+		if(subscribers_ports != networks_ports)
+		{
+			logger().fatal("Number of subscribers and networks ports not equal in the inline operation mode");
+			throw Poco::Exception("Configuration error");
+		}
+		// TODO fill array for determine in <-> out
+		// like:
+		// inout_ports[0] = 1
+		// inout_ports[1] = 0
+		// inout_ports[2] = 3
+		// inout_ports[3] = 2
+		// then we can extract port for the output packets...
 	}
 
 	initParams();
@@ -1021,7 +1007,6 @@ void extFilter::initialize(Application& self)
 
 	if(loadACL())
 		throw Poco::Exception("Can't init ACL");
-
 
 	if(_tries.getBLManager()->init(_domainsFile, _urlsFile, _sslFile, redirect_url.empty() ? nullptr : redirect_url.c_str(), redirect_url.empty() ? 0 : redirect_url.length()))
 	{
@@ -1163,6 +1148,7 @@ int extFilter::main(const ArgVec& args)
 		}
 
 		struct rte_mempool *_mp = nullptr;
+		struct rte_mempool *clone_pool = nullptr;
 
 		std::vector<uint8_t> ports;
 		for (uint8_t portid = 0; portid < _nb_ports; portid++)
@@ -1176,10 +1162,22 @@ int extFilter::main(const ArgVec& args)
 					logger().fatal("Cannot initialize port %d", (int) portid);
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
-				_mp = rte_pktmbuf_pool_create("SenderBuffer", 8192, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+				unsigned n = global_prm->workers_number*2; // 1 to client + 1 to server
+				n = 8192;
+				logger().information("Set number of entries of the sender buffer to %u", n);
+				_mp = rte_pktmbuf_pool_create("SenderBuffer", n, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 				if(_mp == nullptr)
 				{
-					logger().fatal("Unable to allocate mempool for sender");
+					logger().fatal("Unable to allocate mempool for sender: %d", (int) rte_errno);
+					return Poco::Util::Application::EXIT_CONFIG;
+				}
+				n = global_prm->answer_duplication * global_prm->workers_number;
+				n = 1024;
+				logger().information("Set number of entries of the clone buffer to %u", n);
+				clone_pool = rte_pktmbuf_pool_create("clone_pool", n, MBUF_CACHE_SIZE, 0, 0, rte_socket_id());
+				if(clone_pool == nullptr)
+				{
+					logger().fatal("Unable to allocate mempool for clone buffer");
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
 			} else {
@@ -1209,6 +1207,15 @@ int extFilter::main(const ArgVec& args)
 				return Poco::Util::Application::EXIT_CONFIG;
 		}
 
+		pool_name.assign("DPISSLPool");
+		logger().information("Create pool '%s' for the ssl dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.ssl_entries, sizeof(ssl_state),(uint64_t)(global_prm->memory_configs.ssl_entries * sizeof(ssl_state)));
+		struct rte_mempool *dpi_ssl_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.ssl_entries, sizeof(ssl_state), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
+		if(dpi_ssl_mempool == nullptr)
+		{
+			logger().fatal("Unable to create mempool for the ssl dissector.");
+				return Poco::Util::Application::EXIT_CONFIG;
+		}
+
 		initFlowStorages();
 		uint8_t worker_id = 0;
 		uint16_t tx_queue_id = 0;
@@ -1230,6 +1237,7 @@ int extFilter::main(const ArgVec& args)
 
 				dpi_protocol_t protocol;
 				protocol.l4prot = IPPROTO_TCP;
+
 				protocol.l7prot = DPI_PROTOCOL_TCP_HTTP;
 				dpi_set_protocol(dpi_state, protocol);
 
@@ -1261,10 +1269,11 @@ int extFilter::main(const ArgVec& args)
 					prms.params = _sender_params;
 					prms.mac = (uint8_t *)&ports_eth_addr[1];
 					prms.to_mac = &sender_mac[0];
+					prms.answer_duplication = global_prm->answer_duplication;
+					prms.clone_pool = clone_pool;
 				}
 
-
-				WorkerThread* newWorker = new WorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, rte_lcore_to_socket_id(lcore_id), prms, _mp, dpi_http_mempool);
+				WorkerThread* newWorker = new WorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, rte_lcore_to_socket_id(lcore_id), prms, _mp, dpi_http_mempool, dpi_ssl_mempool);
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)
