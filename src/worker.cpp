@@ -99,7 +99,6 @@ WorkerThread::WorkerThread(uint8_t worker_id,const std::string& name, WorkerConf
 	}
 	_dpi_http_mempool = dpi_http_mempool;
 	_dpi_ssl_mempool = dpi_ssl_mempool;
-	_pkt_info_mempool = extFilter::getPktInfoPool();
 }
 
 WorkerThread::~WorkerThread()
@@ -117,10 +116,11 @@ bool WorkerThread::checkSNIBlocked(const char *sni, size_t sni_len, dpi_pkt_info
 		m_ThreadStats.matched_ssl_sni++;
 		if(pkt->ip_version == 4)
 		{
-			_snd->SendRSTIPv4(pkt->pkt, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+			_snd->SendRSTIPv4(pkt->pkt, tcph->ack_seq, tcph->seq);
 			m_ThreadStats.sended_rst_ipv4++;
 		} else {
-			_snd->SendRSTIPv6(pkt->pkt, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+
+			_snd->SendRSTIPv6(pkt->pkt, tcph->ack_seq, tcph->seq);
 			m_ThreadStats.sended_rst_ipv6++;
 		}
 		return true;
@@ -139,11 +139,11 @@ bool WorkerThread::checkURLBlocked(const char *host, size_t host_len, const char
 		{
 			if(pkt->ip_version == 4)
 			{
-				_snd->HTTPRedirectIPv4(pkt->pkt, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), true, redir_url, redir_size);
+				_snd->HTTPRedirectIPv4(pkt->pkt, tcph->ack_seq, rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), true, redir_url, redir_size);
 				m_ThreadStats.matched_http_bl_ipv4++;
 				m_ThreadStats.redirected_http_bl_ipv4++;
 			} else {
-				_snd->HTTPRedirectIPv6(pkt->pkt, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), true, redir_url, redir_size);
+				_snd->HTTPRedirectIPv6(pkt->pkt, tcph->ack_seq, rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq)+pkt->data_length), true, redir_url, redir_size);
 				m_ThreadStats.matched_http_bl_ipv6++;
 				m_ThreadStats.redirected_http_bl_ipv6++;
 			}
@@ -164,8 +164,9 @@ bool WorkerThread::checkURLBlocked(const char *host, size_t host_len, const char
 	return false;
 }
 
-dpi_identification_result_t WorkerThread::identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig)
+dpi_identification_result_t WorkerThread::identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, struct packet_info *pkt_info, uint32_t sig)
 {
+	uint8_t *host_key = (uint8_t *)&pkt_info->keys;
 	dpi_identification_result_t r;
 	dpi_pkt_infos_t infos = { 0 };
 	u_int8_t l3_status;
@@ -448,11 +449,11 @@ dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint
 
 	if(pkt_infos->ip_version == 4)
 	{
-		if(_need_block)
+		if(unlikely(_need_block))
 		{
 			node->cmn.blocked = true;
 		} else {
-			if(pkt_infos->data_length > 0 && node->cmn.blocked)
+			if(unlikely(node->cmn.blocked && pkt_infos->data_length > 0))
 			{
 				switch (r.protocol.l7prot)
 				{
@@ -474,11 +475,11 @@ dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint
 		}
 	} else if (pkt_infos->ip_version == 6)
 	{
-		if(_need_block)
+		if(unlikely(_need_block))
 		{
 			node_ipv6->cmn.blocked = true;
 		} else {
-			if(pkt_infos->data_length > 0 && node_ipv6->cmn.blocked)
+			if(unlikely(node_ipv6->cmn.blocked && pkt_infos->data_length > 0))
 			{
 				switch (r.protocol.l7prot)
 				{
@@ -497,7 +498,6 @@ dpi_identification_result_t WorkerThread::getAppProtocol(uint8_t *host_key, uint
 				}
 			}
 		}
-		
 	}
 
 	if(r.status == DPI_STATUS_TCP_CONNECTION_TERMINATED)
@@ -607,7 +607,6 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	m_ThreadStats.analyzed_packets++;
 
 	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
-//	uint32_t acl_action = m->udata64 & ACL_POLICY_MASK;
 
 	if(unlikely(payload_len > 0 && acl_action == ACL::ACL_DROP))
 	{
@@ -627,7 +626,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	dpi_identification_result_t r;
 
-	r = identifyAppProtocol(l3, ip_len, timestamp, (uint8_t *)&((struct packet_info *)m->userdata)->keys, m->hash.usr);
+	r = identifyAppProtocol(l3, ip_len, timestamp, (struct packet_info *)m->userdata, m->hash.usr);
 
 	switch (r.protocol.l7prot)
 	{
@@ -647,26 +646,20 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	if(payload_len == 0)
 		return false;
 
-	if(r.protocol.l7prot == DPI_PROTOCOL_TCP_SSL)
+	if(unlikely(r.protocol.l7prot == DPI_PROTOCOL_TCP_SSL && m_WorkerConfig.block_ssl_no_sni && acl_action == ACL::ACL_SSL))
 	{
-		if(m_WorkerConfig.block_ssl_no_sni)
+		m_ThreadStats.matched_ssl_ip++;
+		if(ip_version == 4)
 		{
-			if(acl_action == ACL::ACL_SSL)
-			{
-				m_ThreadStats.matched_ssl_ip++;
-				if(ip_version == 4)
-				{
-					_snd->SendRSTIPv4(l3, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
-					m_ThreadStats.sended_rst_ipv4++;
-				}
-				else
-				{
-					_snd->SendRSTIPv6(l3, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
-					m_ThreadStats.sended_rst_ipv6++;
-				}
-				return true;
-			}
+			_snd->SendRSTIPv4(l3, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+			m_ThreadStats.sended_rst_ipv4++;
 		}
+		else
+		{
+			_snd->SendRSTIPv6(l3, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+			m_ThreadStats.sended_rst_ipv6++;
+		}
+		return true;
 	}
 
 //	if(r.protocol.l7prot == DPI_PROTOCOL_TCP_HTTP && !uri.empty())
@@ -686,13 +679,100 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	return false;
 }
 
+static inline void parsePtype(struct rte_mbuf *m, struct packet_info *pkt_info)
+{
+	struct ether_hdr *eth_hdr;
+	uint32_t packet_type = RTE_PTYPE_UNKNOWN;
+	uint16_t ether_type;
+	uint8_t *l3;
+	int hdr_len;
+	struct ipv4_hdr *ipv4_hdr;
+	struct ipv6_hdr *ipv6_hdr;
+
+	pkt_info->timestamp = rte_rdtsc(); // timestamp
+
+	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	ether_type = rte_be_to_cpu_16(eth_hdr->ether_type);
+	l3 = (uint8_t *)eth_hdr + sizeof(struct ether_hdr);
+
+	if(ether_type == ETHER_TYPE_VLAN || ether_type == 0x8847)
+	{
+		while(1)
+		{
+			if(ether_type == ETHER_TYPE_VLAN)
+			{
+				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(l3);
+				ether_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
+				l3 += sizeof(struct vlan_hdr);
+			} else if(ether_type == 0x8847)
+			{
+				uint8_t bos = ((uint8_t *)l3)[2] & 0x1;
+				l3 += 4;
+				if(bos)
+				{
+					ether_type = ETHER_TYPE_IPv4;
+					break;
+				}
+			} else
+				break;
+		}
+	}
+
+	if (ether_type == ETHER_TYPE_IPv4)
+	{
+		ipv4_hdr = (struct ipv4_hdr *)l3;
+		hdr_len = (ipv4_hdr->version_ihl & IPV4_HDR_IHL_MASK) * IPV4_IHL_MULTIPLIER;
+		if (hdr_len == sizeof(struct ipv4_hdr))
+		{
+			packet_type |= RTE_PTYPE_L3_IPV4;
+			if (ipv4_hdr->next_proto_id == IPPROTO_TCP)
+				packet_type |= RTE_PTYPE_L4_TCP;
+			else if (ipv4_hdr->next_proto_id == IPPROTO_UDP)
+				packet_type |= RTE_PTYPE_L4_UDP;
+		} else
+			packet_type |= RTE_PTYPE_L3_IPV4_EXT;
+	} else if (ether_type == ETHER_TYPE_IPv6)
+	{
+		ipv6_hdr = (struct ipv6_hdr *)l3;
+		if (ipv6_hdr->proto == IPPROTO_TCP)
+			packet_type |= RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_TCP;
+		else if (ipv6_hdr->proto == IPPROTO_UDP)
+			packet_type |= RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_UDP;
+		else
+			packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+	}
+	m->packet_type = packet_type;
+	pkt_info->l3 = l3;
+	pkt_info->acl_res = ACL::ACL_DEFAULT_POLICY;
+	m->userdata = pkt_info;
+	uint32_t tcp_or_udp = packet_type & (RTE_PTYPE_L4_TCP | RTE_PTYPE_L4_UDP);
+	uint32_t l3_ptypes = packet_type & RTE_PTYPE_L3_MASK;
+	if(tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV6))
+	{
+		void *ipv6_hdr = l3 + offsetof(struct ipv6_hdr, payload_len);
+		void *data0 = ipv6_hdr;
+		void *data1 = ((uint8_t *)ipv6_hdr) + sizeof(xmm_t);
+		void *data2 = ((uint8_t *)ipv6_hdr) + sizeof(xmm_t) + sizeof(xmm_t);
+		pkt_info->keys.ipv6_key.xmm[0] = em_mask_key(data0, mask1.x);
+		pkt_info->keys.ipv6_key.xmm[1] = _mm_loadu_si128((__m128i *)(data1));
+		pkt_info->keys.ipv6_key.xmm[2] = em_mask_key(data2, mask2.x);
+		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
+	} else if (tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV4))
+	{
+		void *ipv4_hdr = l3 + offsetof(struct ipv4_hdr, time_to_live);
+		pkt_info->keys.ipv4_key.xmm = em_mask_key(ipv4_hdr, mask0.x);
+		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
+	}
+}
+
 /*
  * Put one packet in acl_search struct according to the packet ol_flags
  */
-static inline void prepare_one_packet(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int index)
+static inline void prepare_one_packet(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int index, struct packet_info *pkt_info)
 {
 	struct rte_mbuf* pkt = pkts_in[index];
 
+	parsePtype(pkt, pkt_info);
 	uint32_t l3_ptypes = pkt->packet_type & RTE_PTYPE_L3_MASK;
 
 	// XXX we cannot filter non IP packet yet
@@ -704,7 +784,7 @@ static inline void prepare_one_packet(struct rte_mbuf** pkts_in, struct ACL::acl
 	} else if (l3_ptypes == RTE_PTYPE_L3_IPV6)
 	{
 		/* Fill acl structure */
-		acl->data_ipv6[acl->num_ipv6] = ((struct packet_info *)pkt->userdata)->l3 + offsetof(struct ipv4_hdr, next_proto_id);
+		acl->data_ipv6[acl->num_ipv6] = ((struct packet_info *)pkt->userdata)->l3 + offsetof(struct ipv6_hdr, proto);
 		acl->m_ipv6[(acl->num_ipv6)++] = pkt;
 	}
 }
@@ -712,7 +792,7 @@ static inline void prepare_one_packet(struct rte_mbuf** pkts_in, struct ACL::acl
 /*
  * Loop through all packets and classify them if acl_search if possible.
  */
-static inline void prepare_acl_parameter(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int nb_rx)
+static inline void prepare_acl_parameter(struct rte_mbuf** pkts_in, struct ACL::acl_search_t* acl, int nb_rx, struct packet_info *pkt_infos)
 {
 	int i = 0, j = 0;
 
@@ -733,9 +813,9 @@ static inline void prepare_acl_parameter(struct rte_mbuf** pkts_in, struct ACL::
 			PREFETCH();
 		case 1:
 			PREFETCH();
-
-			while (j > 0) {
-				prepare_one_packet(pkts_in, acl, i - j);
+			while (j > 0)
+			{
+				prepare_one_packet(pkts_in, acl, i - j, &pkt_infos[i-j]);
 				--j;
 			}
 		}
@@ -818,40 +898,35 @@ bool WorkerThread::run(uint32_t coreId)
 				continue;
 
 			m_ThreadStats.total_packets += nb_rx;
-			// prefetch packets...
-/*			for(uint16_t i = 0; i < PREFETCH_OFFSET && i < nb_rx; i++)
-			{
-				rte_prefetch0(rte_pktmbuf_mtod(bufs[i], void *));
-			}
-*/
+
 			struct ACL::acl_search_t acl_search;
 
-			prepare_acl_parameter(bufs, &acl_search, nb_rx);
+			prepare_acl_parameter(bufs, &acl_search, nb_rx, &_pkt_infos[0]);
 
-			if(qconf->cur_acx_ipv4 && acl_search.num_ipv4)
+			if(likely(qconf->cur_acx_ipv4 && acl_search.num_ipv4))
 			{
 				rte_acl_classify(qconf->cur_acx_ipv4, acl_search.data_ipv4, acl_search.res_ipv4, acl_search.num_ipv4, DEFAULT_MAX_CATEGORIES);
 				for(int acli=0; acli < acl_search.num_ipv4; acli++)
 				{
-					if(acl_search.res_ipv4[acli] != 0)
+					if(unlikely(acl_search.res_ipv4[acli] != 0))
 					{
-//						acl_search.m_ipv4[acli]->udata64 = acl_search.res_ipv4[acli];
 						((struct packet_info *)acl_search.m_ipv4[acli]->userdata)->acl_res=acl_search.res_ipv4[acli];
 					}
 				}
 			}
-			if (qconf->cur_acx_ipv6 && acl_search.num_ipv6)
+
+			if(qconf->cur_acx_ipv6 && acl_search.num_ipv6)
 			{
 				rte_acl_classify(qconf->cur_acx_ipv6, acl_search.data_ipv6, acl_search.res_ipv6, acl_search.num_ipv6, DEFAULT_MAX_CATEGORIES);
 				for(int acli=0; acli < acl_search.num_ipv6; acli++)
 				{
-					if(acl_search.res_ipv6[acli] != 0)
+					if(unlikely(acl_search.res_ipv6[acli] != 0))
 					{
-//						acl_search.m_ipv6[acli]->udata64 = acl_search.res_ipv6[acli];
 						((struct packet_info *)acl_search.m_ipv6[acli]->userdata)->acl_res=acl_search.res_ipv6[acli];
 					}
 				}
 			}
+
 			uint64_t cycles = 0;
 			uint64_t blocked_cycles = 0;
 			uint64_t unblocked_cycles = 0;
@@ -872,7 +947,6 @@ bool WorkerThread::run(uint32_t coreId)
 						m_ThreadStats.latency_counters.unblocked_pkts++;
 					}
 					cycles += now - ((struct packet_info *)buf->userdata)->timestamp;
-					rte_mempool_put(_pkt_info_mempool, buf->userdata); // free packet_info
 				}
 				rte_pktmbuf_free(buf);
 			}
@@ -880,7 +954,7 @@ bool WorkerThread::run(uint32_t coreId)
 			m_ThreadStats.latency_counters.blocked_cycles += blocked_cycles;
 			m_ThreadStats.latency_counters.unblocked_cycles += unblocked_cycles;
 			m_ThreadStats.latency_counters.total_pkts += nb_rx;
-			if(_n_send_pkts > 0)
+			if(unlikely(_n_send_pkts != 0))
 			{
 				tx_ret = rte_eth_tx_burst(sender_port, tx_queue_id, _sender_buf, _n_send_pkts);
 				if (unlikely(tx_ret < _n_send_pkts))
