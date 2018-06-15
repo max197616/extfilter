@@ -83,7 +83,7 @@ private:
 //	bool analyzePacketIPv4(struct rte_mbuf* mBuf, uint64_t timestamp);
 
 	dpi_identification_result_t getAppProtocol(uint8_t *host_key, uint64_t timestamp, uint32_t sig, dpi_pkt_infos_t *pkt_infos);
-	dpi_identification_result_t identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, uint8_t *host_key, uint32_t sig);
+	dpi_identification_result_t identifyAppProtocol(const unsigned char* pkt, u_int32_t length, u_int32_t current_time, struct packet_info *pkt_info, uint32_t sig);
 
 	bool checkSSL();
 	std::string _name;
@@ -96,10 +96,11 @@ private:
 	struct rte_mempool *_dpi_http_mempool;
 	struct rte_mempool *_dpi_ssl_mempool;
 
-	struct rte_mempool *_pkt_info_mempool;
 	uint8_t _worker_id;
 	uint32_t ipv4_flow_mask;
 	uint32_t ipv6_flow_mask;
+
+	struct packet_info _pkt_infos[EXTFILTER_CAPTURE_BURST_SIZE];
 public:
 
 	WorkerThread(uint8_t worker_id, const std::string& name, WorkerConfig &workerConfig, dpi_library_state_t* state, int socketid, struct ESender::nparams &sp, struct rte_mempool *mp, struct rte_mempool *dpi_http_mempool, struct rte_mempool *dpi_ssl_mempool);
@@ -189,5 +190,6 @@ public:
 	{
 		return _worker_id;
 	}
+
 };
 
