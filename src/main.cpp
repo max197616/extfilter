@@ -48,7 +48,6 @@ uint64_t extFilter::_tsc_hz;
 
 extFilter *extFilter::_instance = NULL;
 
-struct rte_mempool *extFilter::packet_info_pool[NB_SOCKETS];
 struct ether_addr extFilter::ports_eth_addr[RTE_MAX_ETHPORTS];
 uint8_t port_types[RTE_MAX_ETHPORTS];
 struct lcore_conf extFilter::_lcore_conf[RTE_MAX_LCORE];
@@ -85,7 +84,6 @@ extFilter::extFilter(): _helpRequested(false),
 	for(int i=0; i < NB_SOCKETS; i++)
 	{
 		_pktmbuf_pool[i] = NULL;
-		packet_info_pool[i] = NULL;
 	}
 	for(int i=0; i < RTE_MAX_LCORE; i++)
 	{
@@ -220,105 +218,6 @@ static inline unsigned get_port_max_tx_queues(uint8_t port_id)
 
 	rte_eth_dev_info_get(port_id, &dev_info);
 	return dev_info.max_tx_queues;
-}
-
-
-static inline void em_parse_ptype(struct rte_mbuf *m)
-{
-	struct ether_hdr *eth_hdr;
-	uint32_t packet_type = RTE_PTYPE_UNKNOWN;
-	uint16_t ether_type;
-	uint8_t *l3;
-	int hdr_len;
-	struct ipv4_hdr *ipv4_hdr;
-	struct ipv6_hdr *ipv6_hdr;
-
-	eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
-	ether_type = rte_be_to_cpu_16(eth_hdr->ether_type);
-	l3 = (uint8_t *)eth_hdr + sizeof(struct ether_hdr);
-
-	if(ether_type == ETHER_TYPE_VLAN || ether_type == 0x8847)
-	{
-		while(1)
-		{
-			if(ether_type == ETHER_TYPE_VLAN)
-			{
-				struct vlan_hdr *vlan_hdr = (struct vlan_hdr *)(l3);
-				ether_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
-				l3 += sizeof(struct vlan_hdr);
-			} else if(ether_type == 0x8847)
-			{
-				uint8_t bos = ((uint8_t *)l3)[2] & 0x1;
-				l3 += 4;
-				if(bos)
-				{
-					ether_type = ETHER_TYPE_IPv4;
-					break;
-				}
-			} else
-				break;
-		}
-	}
-
-	if (ether_type == ETHER_TYPE_IPv4) {
-		ipv4_hdr = (struct ipv4_hdr *)l3;
-		hdr_len = (ipv4_hdr->version_ihl & IPV4_HDR_IHL_MASK) * IPV4_IHL_MULTIPLIER;
-		if (hdr_len == sizeof(struct ipv4_hdr)) {
-			packet_type |= RTE_PTYPE_L3_IPV4;
-			if (ipv4_hdr->next_proto_id == IPPROTO_TCP)
-				packet_type |= RTE_PTYPE_L4_TCP;
-			else if (ipv4_hdr->next_proto_id == IPPROTO_UDP)
-				packet_type |= RTE_PTYPE_L4_UDP;
-		} else
-			packet_type |= RTE_PTYPE_L3_IPV4_EXT;
-	} else if (ether_type == ETHER_TYPE_IPv6) {
-		ipv6_hdr = (struct ipv6_hdr *)l3;
-		if (ipv6_hdr->proto == IPPROTO_TCP)
-			packet_type |= RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_TCP;
-		else if (ipv6_hdr->proto == IPPROTO_UDP)
-			packet_type |= RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_UDP;
-		else
-			packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
-	}
-	m->packet_type = packet_type;
-//	m->udata64 = ACL::ACL_DEFAULT_POLICY;
-	struct packet_info *pkt_info;
-	if(rte_mempool_get(extFilter::getPktInfoPool(), (void **)&pkt_info) != 0)
-	{
-		Poco::Util::Application& app = Poco::Util::Application::instance();
-		app.logger().fatal("Not enough memory for the packet_info in the packet_info_pool");
-		return ;
-	}
-	pkt_info->timestamp = rte_rdtsc(); // timestamp
-	pkt_info->l3 = l3;
-	pkt_info->acl_res = ACL::ACL_DEFAULT_POLICY;
-	m->userdata = pkt_info;
-	uint32_t tcp_or_udp = packet_type & (RTE_PTYPE_L4_TCP | RTE_PTYPE_L4_UDP);
-	uint32_t l3_ptypes = packet_type & RTE_PTYPE_L3_MASK;
-	if(tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV6))
-	{
-		void *ipv6_hdr = l3 + offsetof(struct ipv6_hdr, payload_len);
-		void *data0 = ipv6_hdr;
-		void *data1 = ((uint8_t *)ipv6_hdr) + sizeof(xmm_t);
-		void *data2 = ((uint8_t *)ipv6_hdr) + sizeof(xmm_t) + sizeof(xmm_t);
-		pkt_info->keys.ipv6_key.xmm[0] = em_mask_key(data0, mask1.x);
-		pkt_info->keys.ipv6_key.xmm[1] = _mm_loadu_si128((__m128i *)(data1));
-		pkt_info->keys.ipv6_key.xmm[2] = em_mask_key(data2, mask2.x);
-		m->hash.usr = ipv6_hash_crc(&pkt_info->keys.ipv6_key,0,0);
-	} else if (tcp_or_udp && (l3_ptypes == RTE_PTYPE_L3_IPV4))
-	{
-		void *ipv4_hdr = l3 + offsetof(struct ipv4_hdr, time_to_live);
-		pkt_info->keys.ipv4_key.xmm = em_mask_key(ipv4_hdr, mask0.x);
-		m->hash.usr = ipv4_hash_crc(&pkt_info->keys.ipv4_key,0,0);
-	}
-}
-
-uint16_t cb_parse_ptype(uint8_t port __rte_unused, uint16_t queue __rte_unused, struct rte_mbuf *pkts[], uint16_t nb_pkts, uint16_t max_pkts __rte_unused, void *user_param __rte_unused)
-{
-	unsigned i;
-	for (i = 0; i < nb_pkts; ++i)
-		em_parse_ptype(pkts[i]);
-	return nb_pkts;
 }
 
 int extFilter::initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_tx_queue)
@@ -478,12 +377,6 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 				logger().fatal("rte_eth_rx_queue_setup: err=%d port=%d", (int) retval, (int)port);
 				return retval;
 			}
-			if (!rte_eth_add_rx_callback(port, queueid, cb_parse_ptype, NULL))
-			{
-				logger().error("Unable to add rx callback to port %d", (int) port);
-				return -1;
-			}
-
 		}
 		if (queueid == -1) {
 			// no rx_queue set, don't need to setup tx_queue for
@@ -696,17 +589,6 @@ int extFilter::initMemory(uint8_t nb_ports)
 			}
 			// setup hash
 //			setup_lpm(socketid);
-		}
-		if(packet_info_pool[socketid] == NULL)
-		{
-			snprintf(s, sizeof(s), "packet_info_pool_%d", socketid);
-			packet_info_pool[socketid] = rte_mempool_create(s, nb_mbuf, sizeof(struct packet_info), 0, 0, NULL, NULL, NULL, NULL, socketid, 0);
-			if(packet_info_pool[socketid] == NULL)
-			{
-				logger().fatal("Cannot allocate memory pool on socket %d", (int) socketid);
-				return -1;
-			}
-			logger().information("Allocated memory pool (%d entries) for packet info on sockets %d", (int) nb_mbuf, (int) socketid);
 		}
 
 		qconf = &_lcore_conf[lcore_id];
