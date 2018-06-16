@@ -195,7 +195,7 @@ void extFilter::initParams()
 	prm->flow_lifetime[1] = 300;
 
 	prm->memory_configs.http_entries = _calc_scale(scale, 70000, 250000);
-	prm->memory_configs.ssl_entries = _calc_scale(scale, 120000, 360000);
+	prm->memory_configs.ssl_entries = _calc_scale(scale, 150000, 470000);
 
 	prm->answer_duplication = config().getInt("answer_duplication", 0);
 	if(prm->answer_duplication > 3)
