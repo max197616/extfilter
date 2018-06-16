@@ -194,8 +194,17 @@ void extFilter::initParams()
 	prm->flow_lifetime[0] = 30;
 	prm->flow_lifetime[1] = 300;
 
-	prm->memory_configs.http_entries = _calc_scale(scale, 70000, 250000);
-	prm->memory_configs.ssl_entries = _calc_scale(scale, 150000, 470000);
+	int http_entries = config().getInt("dpi.http_entries", 0);
+	if(http_entries)
+		prm->memory_configs.http_entries = http_entries;
+	else
+		prm->memory_configs.http_entries = _calc_scale(scale, 70000, 250000);
+
+	int ssl_entries = config().getInt("dpi.ssl_entries", 0);
+	if(ssl_entries)
+		prm->memory_configs.ssl_entries = ssl_entries;
+	else
+		prm->memory_configs.ssl_entries = _calc_scale(scale, 150000, 470000);
 
 	prm->answer_duplication = config().getInt("answer_duplication", 0);
 	if(prm->answer_duplication > 3)
