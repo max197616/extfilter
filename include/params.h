@@ -87,6 +87,8 @@ struct global_params_t
 	uint64_t flow_lifetime[2]; // [0] для flows, который завершены или установлены без данных, [1] для flows с данными
 	uint8_t answer_duplication;
 	operation_modes operation_mode;
+	bool jumbo_frames;
+	unsigned int max_pkt_len;
 };
 
 struct common_data_t

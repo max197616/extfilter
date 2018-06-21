@@ -220,6 +220,17 @@ void extFilter::initParams()
 	}
 
 	prm->operation_mode = _operation_mode;
+	prm->jumbo_frames = config().getBool("jumbo_frames", false);
+	if(prm->jumbo_frames)
+	{
+		unsigned int max_pkt_len = config().getInt("max_pkt_len", MAX_JUMBO_PKT_LEN);
+		if(max_pkt_len < 64 || max_pkt_len > MAX_JUMBO_PKT_LEN)
+		{
+			logger().warning("Invalid packet length in max_pkt_len!");
+			max_pkt_len = MAX_JUMBO_PKT_LEN;
+		}
+		prm->max_pkt_len = max_pkt_len;
+	}
 }
 
 static inline unsigned get_port_max_rx_queues(uint8_t port_id)
@@ -327,10 +338,22 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 	portConf.rxmode.header_split = DPDK_CONFIG_HEADER_SPLIT;
 	portConf.rxmode.hw_ip_checksum = DPDK_CONFIG_HW_IP_CHECKSUM;
 	portConf.rxmode.hw_vlan_filter = DPDK_CONFIG_HW_VLAN_FILTER;
-	portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME;
+	if(global_prm->jumbo_frames)
+	{
+		portConf.rxmode.jumbo_frame = 1;
+		portConf.rxmode.max_rx_pkt_len = global_prm->max_pkt_len;
+		// for dpdk >= 18
+/*		portConf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+		portConf.txmode.offloads |= DEV_TX_OFFLOAD_MULTI_SEGS; */
+	}
+	else
+	{
+		// for dpdk >= 18
+/*		portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME; */
+		portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
+	}
 	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
 	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
-//<---->portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
 
 	portConf.rx_adv_conf.rss_conf.rss_key = m_RSSKey;
 	portConf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV6;
