@@ -20,7 +20,9 @@
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include <Poco/FileStream.h>
+#include <Poco/Net/IPAddress.h>
 #include "acl.h"
+#include "main.h"
 
 struct rte_acl_ctx* ACL::ipv4_acx[NB_SOCKETS];
 struct rte_acl_ctx* ACL::ipv6_acx[NB_SOCKETS];

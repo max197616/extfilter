@@ -90,6 +90,7 @@ struct ThreadStats
 	uint64_t matched_http_bl_ipv6;
 	uint64_t redirected_http_bl_ipv6;
 
+	uint64_t tx_dropped;
 
 	ThreadStats()
 	{

@@ -19,10 +19,21 @@
 
 #pragma once
 
-#include "params.h"
-
 // maximum active threads
 #define MAX_WORKER_THREADS 10
+
+#define DEFAULT_MBUF_POOL_SIZE 8191
+#define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_LCORE_PARAMS 1024
+#define NB_SOCKETS 4
+#define MAX_RX_QUEUE_PER_PORT 128
+#define EXTF_RX_DESC_DEFAULT 256
+#define EXTF_TX_DESC_DEFAULT 512
+#define PERCENT_URL_ENTRIES 0.20
+
+#define EXTFILTER_CAPTURE_BURST_SIZE 32
+#define EXTFILTER_WORKER_BURST_SIZE EXTFILTER_CAPTURE_BURST_SIZE
+#define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
 
 #define MAX_REDIRECT_URL_SIZE 1189
 
@@ -30,12 +41,11 @@
 const char r_line1[] = "HTTP/1.1 302 Moved Temporarily\r\n";
 const char r_line2[] = "Location: ";
 const char r_line3[] = "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-const char f_lines[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+const char f_lines[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 const char uri_p[] = "uri=http%3A%2F%2F";
 
 #define OUR_REDIR_SIZE (sizeof(r_line1) + sizeof(r_line2) + sizeof(r_line3) - 3)
 #define OUR_PAYLOAD_SIZE 1400
 
-extern const global_params_t *global_prm;
-extern worker_params_t worker_params[MAX_WORKER_THREADS];
+

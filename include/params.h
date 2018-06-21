@@ -21,6 +21,8 @@
 
 #include <rte_config.h>
 #include <rte_malloc.h>
+#include "dtypes.h"
+#include "cfg.h"
 
 class FlowStorage;
 struct rte_mempool;
@@ -64,6 +66,18 @@ struct fragmentation_configs_t
 	fragmentation_config_t ipv6;
 };
 
+struct memory_pool_t
+{
+	rte_mempool *mempool;
+	uint32_t entries; // количество элементов
+};
+
+struct memory_pools_t
+{
+	memory_pool_t ssl_entries;
+	memory_pool_t http_entries;
+};
+
 struct global_params_t
 {
 	memory_configs_t memory_configs;
@@ -72,6 +86,12 @@ struct global_params_t
 	uint8_t workers_number;
 	uint64_t flow_lifetime[2]; // [0] для flows, который завершены или установлены без данных, [1] для flows с данными
 	uint8_t answer_duplication;
+	operation_modes operation_mode;
+};
+
+struct common_data_t
+{
+	memory_pools_t mempools;
 };
 
 struct flow_storage_t
@@ -89,4 +109,46 @@ struct worker_params_t
 	uint16_t tx_queue_id;
 } __rte_cache_aligned;
 
+struct lcore_params {
+	uint8_t port_id;
+	uint8_t port_type;
+	uint8_t queue_id;
+	uint8_t lcore_id;
+	uint8_t mapto;
+} __rte_cache_aligned;
 
+struct lcore_rx_queue {
+	uint8_t port_id;
+	uint8_t port_type;
+	uint8_t queue_id;
+} __rte_cache_aligned;
+
+struct mbuf_table
+{
+	uint16_t len;
+	struct rte_mbuf* m_table[EXTFILTER_CAPTURE_BURST_SIZE];
+};
+
+struct lcore_conf {
+	uint16_t n_rx_queue;
+	struct lcore_rx_queue rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
+	struct rte_acl_ctx *cur_acx_ipv4, *new_acx_ipv4;
+	struct rte_acl_ctx *cur_acx_ipv6, *new_acx_ipv6;
+	uint8_t sender_port;
+	uint16_t n_tx_port;
+	uint16_t tx_queue;
+	uint16_t tx_port_id[RTE_MAX_ETHPORTS];
+	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
+	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
+} __rte_cache_aligned;
+
+struct filter_tx
+{
+	struct mbuf_table *mbuf;
+	bool to_client;
+};
+
+
+extern const global_params_t *global_prm;
+extern common_data_t *common_data;
+extern worker_params_t worker_params[MAX_WORKER_THREADS];

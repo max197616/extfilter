@@ -33,6 +33,7 @@
 #include "config.h"
 #include "tries.h"
 #include "ssli.h"
+#include "bworker.h"
 
 #define MBUF_CACHE_SIZE 256
 
@@ -44,8 +45,6 @@
 #define DPDK_CONFIG_HW_STRIP_CRC	0 /**< CRC stripped by hardware disabled */
 #define DPDK_CONFIG_MQ_MODE		ETH_MQ_RX_RSS
 
-uint64_t extFilter::_tsc_hz;
-
 extFilter *extFilter::_instance = NULL;
 
 struct ether_addr extFilter::ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -56,6 +55,7 @@ uint8_t sender_mac[6];
 
 const global_params_t *global_prm = nullptr; // основные параметры системы
 worker_params_t worker_params[MAX_WORKER_THREADS] __rte_cache_aligned; // параметры для worker'ов
+common_data_t *common_data; // данные для работы фильтра
 
 uint8_t m_RSSKey[40] = {
 	0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
@@ -93,8 +93,13 @@ extFilter::extFilter(): _helpRequested(false),
 	if(global_prm == nullptr)
 	{
 		global_prm = new global_params_t;
+		memset((void *)global_prm, 0, sizeof(global_params_t));
 	}
-	
+	if(common_data == nullptr)
+	{
+		common_data = new common_data_t;
+		memset(common_data, 0, sizeof(common_data_t));
+	}
 //	Poco::ErrorHandler::set(&_errorHandler);
 }
 
@@ -102,6 +107,7 @@ extFilter::extFilter(): _helpRequested(false),
 extFilter::~extFilter()
 {
 	delete global_prm;
+	delete common_data;
 }
 
 int _calc_scale(int scale, int min_val, int max_val)
@@ -126,7 +132,6 @@ int _calc_number_recs(int n_workers, int num_flows)
 void extFilter::initParams()
 {
 	global_params_t *prm = (global_params_t *)global_prm;
-	memset(prm, 0, sizeof(global_params_t));
 
 	int scale = config().getInt("dpi.scale", 10);
 	if(scale < 1 || scale > 10)
@@ -211,6 +216,8 @@ void extFilter::initParams()
 	{
 		logger().warning("answer_duplication set to 3, it must be between 0 and 3");
 	}
+
+	prm->operation_mode = _operation_mode;
 }
 
 static inline unsigned get_port_max_rx_queues(uint8_t port_id)
@@ -337,7 +344,8 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 	int retval;
 
 	nb_rx_queue = _get_port_n_rx_queues(port);
-	nb_tx_queue = nb_rx_queue;
+	nb_tx_queue = rte_lcore_count();
+
 	if (nb_rx_queue > get_port_max_rx_queues(port))
 	{
 		logger().fatal("Number of rx queues %d exceeds max number of rx queues %d for port %d", (int)nb_rx_queue, (int)get_port_max_rx_queues(port), (int)port);
@@ -387,12 +395,11 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 				return retval;
 			}
 		}
-		if (queueid == -1) {
+//		if (queueid == -1) {
 			// no rx_queue set, don't need to setup tx_queue for
 			// that core
-			continue;
-		}
-//		retval = rte_eth_tx_queue_setup(port, q, TX_RING_SIZE, rte_eth_dev_socket_id(port), NULL);
+//			continue;
+//		}
 
 		logger().information("port=%d tx_queueid=%d nb_txd=%d core=%d", (int) port, (int) nb_tx_queue, (int) _nb_txd, (int) lcore_id);
 		retval = rte_eth_tx_queue_setup(port, nb_tx_queue, _nb_txd, socketid, NULL);
@@ -402,6 +409,8 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 			return retval;
 		}
 		qconf->tx_queue_id[port] = nb_tx_queue++;
+		qconf->tx_port_id[qconf->n_tx_port] = port;
+		qconf->n_tx_port++;
 	}
 
 	retval = rte_eth_dev_start(port);
@@ -838,6 +847,10 @@ void extFilter::initialize(Application& self)
 			_lcore_params_array[_nb_lcore_params].queue_id = queue_id;
 			_lcore_params_array[_nb_lcore_params].lcore_id = lcore_id;
 			_lcore_params_array[_nb_lcore_params].mapto = mapto;
+			if(_operation_mode == OP_MODE_INLINE)
+			{
+				_lcore_conf[lcore_id].sender_port = mapto;
+			}
 			_nb_lcore_params++;
 			nb_lcores_per_port++;
 		}
@@ -862,13 +875,14 @@ void extFilter::initialize(Application& self)
 			logger().fatal("Number of subscribers and networks ports not equal in the inline operation mode");
 			throw Poco::Exception("Configuration error");
 		}
-		// TODO fill array for determine in <-> out
-		// like:
-		// inout_ports[0] = 1
-		// inout_ports[1] = 0
-		// inout_ports[2] = 3
-		// inout_ports[3] = 2
-		// then we can extract port for the output packets...
+		for(auto i = 0; i < _nb_lcore_params; i++)
+		{
+			if(_lcore_params_array[i].mapto > n_ports)
+			{
+				logger().fatal("Port %d mapped to the unexisting port %d", (int) _lcore_params_array[i].port_id, (int) _lcore_params_array[i].mapto);
+				throw Poco::Exception("Configuration error");
+			}
+		}
 	}
 
 	initParams();
@@ -904,9 +918,6 @@ void extFilter::initialize(Application& self)
 		logger().fatal("Unable to load blacklists");
 		throw Poco::Exception("Unable to load blacklists");
 	}
-
-	// init value...
-	_tsc_hz = rte_get_tsc_hz();
 }
 
 void extFilter::uninitialize()
@@ -1012,6 +1023,31 @@ namespace
 	}
 }
 
+int extFilter::initDPIMemPools()
+{
+	std::string pool_name("DPIHTTPPool");
+	logger().information("Create pool '%s' for the http dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.http_entries, sizeof(http::http_req_buf),(uint64_t)(global_prm->memory_configs.http_entries * sizeof(http::http_req_buf)));
+	common_data->mempools.http_entries.entries = global_prm->memory_configs.http_entries;
+	struct rte_mempool *dpi_http_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.http_entries, sizeof(http::http_req_buf), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
+	common_data->mempools.http_entries.mempool = dpi_http_mempool;
+	if(dpi_http_mempool == nullptr)
+	{
+		logger().fatal("Unable to create mempool for the http dissector.");
+		return -1;
+	}
+
+	pool_name.assign("DPISSLPool");
+	logger().information("Create pool '%s' for the ssl dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.ssl_entries, sizeof(ssl_state),(uint64_t)(global_prm->memory_configs.ssl_entries * sizeof(ssl_state)));
+	common_data->mempools.ssl_entries.entries = global_prm->memory_configs.ssl_entries;
+	struct rte_mempool *dpi_ssl_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.ssl_entries, sizeof(ssl_state), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
+	common_data->mempools.ssl_entries.mempool = dpi_ssl_mempool;
+	if(dpi_ssl_mempool == nullptr)
+	{
+		logger().fatal("Unable to create mempool for the ssl dissector.");
+		return -1;
+	}
+	return 0;
+}
 
 int extFilter::main(const ArgVec& args)
 {
@@ -1041,6 +1077,11 @@ int extFilter::main(const ArgVec& args)
 		struct rte_mempool *_mp = nullptr;
 		struct rte_mempool *clone_pool = nullptr;
 
+		unsigned n = global_prm->workers_number*2; // 1 to client + 1 to server
+		n = 8192;
+		logger().information("Set number of entries of the sender buffer to %u", n);
+		_mp = rte_pktmbuf_pool_create("SenderBuffer", n, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+
 		std::vector<uint8_t> ports;
 		for (uint8_t portid = 0; portid < _nb_ports; portid++)
 		{
@@ -1053,10 +1094,6 @@ int extFilter::main(const ArgVec& args)
 					logger().fatal("Cannot initialize port %d", (int) portid);
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
-				unsigned n = global_prm->workers_number*2; // 1 to client + 1 to server
-				n = 8192;
-				logger().information("Set number of entries of the sender buffer to %u", n);
-				_mp = rte_pktmbuf_pool_create("SenderBuffer", n, MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 				if(_mp == nullptr)
 				{
 					logger().fatal("Unable to allocate mempool for sender: %d", (int) rte_errno);
@@ -1081,31 +1118,16 @@ int extFilter::main(const ArgVec& args)
 			ports.push_back(portid);
 		}
 
+		if(initDPIMemPools())
+		{
+			return Poco::Util::Application::EXIT_CONFIG;
+		}
 		WorkerConfig workerConfigArr[RTE_MAX_LCORE];
 
 		Poco::TaskManager tm;
 
 //		NotifyManager *nm = new NotifyManager(20000, _notify_groups);
 //		tm.start(nm);
-
-
-		std::string pool_name("DPIHTTPPool");
-		logger().information("Create pool '%s' for the http dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.http_entries, sizeof(http::http_req_buf),(uint64_t)(global_prm->memory_configs.http_entries * sizeof(http::http_req_buf)));
-		struct rte_mempool *dpi_http_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.http_entries, sizeof(http::http_req_buf), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
-		if(dpi_http_mempool == nullptr)
-		{
-			logger().fatal("Unable to create mempool for the http dissector.");
-				return Poco::Util::Application::EXIT_CONFIG;
-		}
-
-		pool_name.assign("DPISSLPool");
-		logger().information("Create pool '%s' for the ssl dissector with number of entries: %u, element size %z size: %Lu bytes", pool_name, global_prm->memory_configs.ssl_entries, sizeof(ssl_state),(uint64_t)(global_prm->memory_configs.ssl_entries * sizeof(ssl_state)));
-		struct rte_mempool *dpi_ssl_mempool = rte_mempool_create(pool_name.c_str(), global_prm->memory_configs.ssl_entries, sizeof(ssl_state), 0, 0, NULL, NULL, NULL, NULL, 0, 0);
-		if(dpi_ssl_mempool == nullptr)
-		{
-			logger().fatal("Unable to create mempool for the ssl dissector.");
-				return Poco::Util::Application::EXIT_CONFIG;
-		}
 
 		initFlowStorages();
 		uint8_t worker_id = 0;
@@ -1163,8 +1185,11 @@ int extFilter::main(const ArgVec& args)
 					prms.answer_duplication = global_prm->answer_duplication;
 					prms.clone_pool = clone_pool;
 				}
-
-				WorkerThread* newWorker = new WorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, rte_lcore_to_socket_id(lcore_id), prms, _mp, dpi_http_mempool, dpi_ssl_mempool);
+				WorkerThread* newWorker;
+				if(_operation_mode == OP_MODE_MIRROR)
+					newWorker = new WorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, prms, _mp);
+				else
+					newWorker = new BWorkerThread(worker_id, workerName, workerConfigArr[worker_id], dpi_state, prms, _mp);
 
 				int err = rte_eal_remote_launch(dpdkWorkerThreadStart, newWorker, lcore_id);
 				if (err != 0)

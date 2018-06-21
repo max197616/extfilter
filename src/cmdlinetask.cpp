@@ -374,13 +374,19 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "  SSL/TLS packets: %" PRIu64 "\n", stats.ssl_packets);
 	cmdline_printf(cl, "  SSL/TLS partial packets: %" PRIu64 "\n", stats.dpi_ssl_partial_packets);
 
-	cmdline_printf(cl, "  Allocs:\n");
-	cmdline_printf(cl, "    HTTP: %" PRIu64 "\n", stats.dpi_alloc_http);
-	cmdline_printf(cl, "    SSL: %" PRIu64 "\n", stats.dpi_alloc_ssl);
-	
-//	cmdline_printf(cl, "  SSL/TLS max packet size: %" PRIu32 "\n", ssl_max_packet_size);
-//	cmdline_printf(cl, "  SSL/TLS mallocs: %" PRIu64 "\n", ssl_mallocs);
-//	cmdline_printf(cl, "  SSL/TLS reallocs: %" PRIu64 "\n", ssl_reallocs);
+	cmdline_printf(cl, "  DPI parsers:\n");
+	cmdline_printf(cl, "    Allocs:\n");
+	cmdline_printf(cl, "      HTTP: %" PRIu64 "\n", stats.dpi_alloc_http);
+	cmdline_printf(cl, "      SSL: %" PRIu64 "\n", stats.dpi_alloc_ssl);
+	cmdline_printf(cl, "    Memory pools usage:\n");
+	cmdline_printf(cl, "      HTTP: %d\n", rte_mempool_in_use_count(common_data->mempools.http_entries.mempool));
+	cmdline_printf(cl, "      SSL: %d\n", rte_mempool_in_use_count(common_data->mempools.ssl_entries.mempool));
+	cmdline_printf(cl, "    Memory pools free:\n");
+	cmdline_printf(cl, "      HTTP: %d\n", rte_mempool_avail_count(common_data->mempools.http_entries.mempool));
+	cmdline_printf(cl, "      SSL: %d\n", rte_mempool_avail_count(common_data->mempools.ssl_entries.mempool));
+	cmdline_printf(cl, "  DPI errors:\n");
+	cmdline_printf(cl, "    No memory http: %" PRIu64 "\n",stats.dpi_no_mempool_http);
+	cmdline_printf(cl, "    No memory ssl: %" PRIu64 "\n",stats.dpi_no_mempool_ssl);
 
 	if(stats.ip_packets && stats.total_bytes)
 	{
@@ -415,9 +421,6 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "    IPv6:\n");
 	cmdline_printf(cl, "      HTTP : %" PRIu64 "\n", stats.seen_already_blocked_http_ipv6);
 	cmdline_printf(cl, "      SSL  : %" PRIu64 "\n", stats.seen_already_blocked_ssl_ipv6);
-	cmdline_printf(cl, "  DPI errors:\n");
-	cmdline_printf(cl, "    No memory http: %" PRIu64 "\n",stats.dpi_no_mempool_http);
-	cmdline_printf(cl, "    No memory ssl: %" PRIu64 "\n",stats.dpi_no_mempool_ssl);
 	cmdline_printf(cl, "  Flows:\n");
 	cmdline_printf(cl, "    IPv4:\n");
 	cmdline_printf(cl, "      New:       %" PRIu64 "\n", stats.new_flow);

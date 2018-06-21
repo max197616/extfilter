@@ -24,8 +24,9 @@
 #include <rte_ip.h>
 #include <map>
 #include <string>
-#include "worker.h"
-#include "main.h"
+#include <set>
+//#include "worker.h"
+#include "cfg.h"
 
 #define MAX_ACL_RULE_NUM 100000
 #define DEFAULT_MAX_CATEGORIES 1

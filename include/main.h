@@ -28,51 +28,10 @@
 #include "notification.h"
 #include "tries.h"
 
-#define DEFAULT_MBUF_POOL_SIZE 8191
-#define MAX_RX_QUEUE_PER_LCORE 16
-#define MAX_LCORE_PARAMS 1024
-#define NB_SOCKETS 4
-#define MAX_RX_QUEUE_PER_PORT 128
-#define EXTF_RX_DESC_DEFAULT 256
-#define EXTF_TX_DESC_DEFAULT 512
-#define PERCENT_URL_ENTRIES 0.20
-#define EXTF_MAX_PKT_BURST 32
 
 class AhoCorasickPlus;
 class Patricia;
 class ACL;
-
-struct lcore_params {
-	uint8_t port_id;
-	uint8_t port_type;
-	uint8_t queue_id;
-	uint8_t lcore_id;
-	uint8_t mapto;
-} __rte_cache_aligned;
-
-struct lcore_rx_queue {
-	uint8_t port_id;
-	uint8_t port_type;
-	uint8_t queue_id;
-} __rte_cache_aligned;
-
-struct mbuf_table
-{
-	uint16_t len;
-	struct rte_mbuf* m_table[EXTF_MAX_PKT_BURST];
-};
-
-struct lcore_conf {
-	uint16_t n_rx_queue;
-	struct lcore_rx_queue rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
-	struct rte_acl_ctx *cur_acx_ipv4, *new_acx_ipv4;
-	struct rte_acl_ctx *cur_acx_ipv6, *new_acx_ipv6;
-	uint8_t sender_port;
-	uint16_t tx_queue;
-	uint16_t tx_queue_id[RTE_MAX_ETHPORTS];
-	struct mbuf_table tx_mbufs[RTE_MAX_ETHPORTS];
-} __rte_cache_aligned;
-
 
 class extFilter: public Poco::Util::ServerApplication
 {
@@ -124,16 +83,6 @@ public:
 	std::string &getNotifyFile()
 	{
 		return _notify_acl_file;
-	}
-
-	static inline uint64_t getTscHz()
-	{
-		return _tsc_hz;
-	}
-
-	static inline struct rte_mempool *getPktInfoPool()
-	{
-		return packet_info_pool[rte_socket_id()];
 	}
 
 	static inline struct lcore_conf *getLcoreConf(uint32_t lcore_id)
@@ -195,7 +144,10 @@ public:
 		return &_tries;
 	}
 
-	static rte_mempool *packet_info_pool[NB_SOCKETS];
+	inline operation_modes getOperationMode()
+	{
+		return _operation_mode;
+	}
 
 	static struct ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 private:
@@ -209,6 +161,7 @@ private:
 	int _init_lcore_rx_queues(void);
 	int _check_lcore_params(void);
 	int _check_port_config(const unsigned nb_ports);
+	int initDPIMemPools();
 
 	bool _helpRequested;
 	bool _listDPDKPorts;
@@ -226,8 +179,6 @@ private:
 	int _statistic_interval;
 
 	struct CSender::params _sender_params;
-	
-	static uint64_t _tsc_hz;
 
 	int _numa_on;
 	uint32_t _enabled_port_mask;
