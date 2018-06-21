@@ -196,8 +196,10 @@ void extFilter::initParams()
 	prm->memory_configs.ipv4.recs_number = _calc_number_recs(_nb_lcore_params, prm->memory_configs.ipv4.flows_number);
 	prm->memory_configs.ipv6.recs_number = _calc_number_recs(_nb_lcore_params, prm->memory_configs.ipv6.flows_number);
 
-	prm->flow_lifetime[0] = 30;
-	prm->flow_lifetime[1] = 300;
+	uint64_t lifetime = config().getInt("dpi.lifetime_short", 30);
+	prm->flow_lifetime[0] = lifetime;
+	lifetime = config().getInt("dpi.lifetime_long", 300);
+	prm->flow_lifetime[1] = lifetime;
 
 	int http_entries = config().getInt("dpi.http_entries", 0);
 	if(http_entries)
