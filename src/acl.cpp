@@ -165,6 +165,31 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						} else {
 							found = str.find(":");
 						}
+						uint8_t proto = IPPROTO_TCP;
+						uint8_t proto_mask = 0xff;
+						std::size_t found_comma = str.find(",");
+						if(found_comma != std::string::npos)
+						{
+							std::string protocol_str = str.substr(found_comma + 1, str.length());
+							str.erase(found_comma, str.length() - found_comma);
+							std::size_t found_sl = protocol_str.find("/");
+							if(found_sl != std::string::npos)
+							{
+								std::string p_mask = protocol_str.substr(found_sl + 1, protocol_str.length());
+								std::string p = protocol_str.substr(0, found_sl);
+								long int p_mask_b = std::strtol(p_mask.c_str(),NULL, 0);
+								long int p_b = std::strtol(p.c_str(), NULL, 0);
+								if(p_mask_b > 255 || p_b > 255)
+								{
+									_logger.warning("Bad protocol/mask (value > 255) in line %d", lineno);
+								} else {
+									proto = p_b;
+									proto_mask = p_mask_b;
+								}
+							} else {
+								_logger.warning("Bad protocol/mask in line %d", lineno);
+							}
+						}
 						std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
 						std::size_t found_slash=ip.find("/");
 						uint32_t def_mask=0;
@@ -205,8 +230,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
 						{
 							struct ACL::acl4_rule rule;
-							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
-							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
+							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = proto;
+							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = proto_mask;
 							if(entry.second == ACL::ACL_NOTIFY)
 							{
 								rule.field[ACL::DST_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
@@ -245,8 +270,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						} else if (ip_addr.family() == Poco::Net::IPAddress::IPv6)
 						{
 							struct ACL::acl6_rule rule;
-							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = IPPROTO_TCP;
-							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = 0xff;
+							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = proto;
+							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = proto_mask;
 							_parse_ipv6((uint32_t *)&def_ipv6, rule.field + SRC1_FIELD_IPV6, 0);
 							_parse_ipv6((uint32_t *)ip_addr.addr(), rule.field + DST1_FIELD_IPV6, def_mask ? def_mask : 128);
 
