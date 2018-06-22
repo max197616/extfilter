@@ -582,8 +582,14 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	m_ThreadStats.ip_packets++;
 
+	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
+
 	uint8_t ip_protocol=(ip_version == 4 ? ipv4_header->next_proto_id : ipv6_header->proto);
 
+	if(unlikely(acl_action == ACL::ACL_DROP && ip_protocol != IPPROTO_TCP && global_prm->operation_mode == OP_MODE_INLINE))
+	{
+		return true;
+	}
 	if(ip_protocol != IPPROTO_TCP)
 	{
 		return false;
@@ -605,7 +611,6 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 
 	m_ThreadStats.analyzed_packets++;
 
-	uint32_t acl_action = pkt_info->acl_res & ACL_POLICY_MASK;
 
 	if(unlikely(payload_len > 0 && acl_action == ACL::ACL_DROP))
 	{
