@@ -11,6 +11,7 @@
 #include <rte_malloc.h>
 #include <rte_cycles.h>
 #include <rte_ethdev.h>
+#include <rte_version.h>
 #include <rte_ip.h>
 #include <signal.h>
 #include <iostream>
@@ -41,7 +42,6 @@
 #define DPDK_CONFIG_SPLIT_HEADER_SIZE	0
 #define DPDK_CONFIG_HW_IP_CHECKSUM	0 /**< IP checksum offload disabled */
 #define DPDK_CONFIG_HW_VLAN_FILTER	0 /**< VLAN filtering disabled */
-#define DPDK_CONFIG_JUMBO_FRAME		0 /**< Jumbo Frame Support disabled */
 #define DPDK_CONFIG_HW_STRIP_CRC	0 /**< CRC stripped by hardware disabled */
 #define DPDK_CONFIG_MQ_MODE		ETH_MQ_RX_RSS
 
@@ -258,7 +258,9 @@ int extFilter::initSenderPort(uint8_t port, struct ether_addr *addr, uint8_t nb_
 	portConf.rxmode.header_split = DPDK_CONFIG_HEADER_SPLIT;
 	portConf.rxmode.hw_ip_checksum = DPDK_CONFIG_HW_IP_CHECKSUM;
 	portConf.rxmode.hw_vlan_filter = DPDK_CONFIG_HW_VLAN_FILTER;
-	portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME;
+#if RTE_VERSION < RTE_VERSION_NUM(18, 0, 0, 0)
+	portConf.rxmode.jumbo_frame = 0;
+#endif
 	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
 	portConf.rxmode.mq_mode = DPDK_CONFIG_MQ_MODE;
 	portConf.rx_adv_conf.rss_conf.rss_key = NULL;
@@ -340,16 +342,19 @@ int extFilter::initPort(uint8_t port, struct ether_addr *addr, bool no_promisc)
 	portConf.rxmode.hw_vlan_filter = DPDK_CONFIG_HW_VLAN_FILTER;
 	if(global_prm->jumbo_frames)
 	{
+#if RTE_VERSION >= RTE_VERSION_NUM(18, 0, 0, 0)
+		portConf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
+		portConf.txmode.offloads |= DEV_TX_OFFLOAD_MULTI_SEGS;
+#else
 		portConf.rxmode.jumbo_frame = 1;
 		portConf.rxmode.max_rx_pkt_len = global_prm->max_pkt_len;
-		// for dpdk >= 18
-/*		portConf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
-		portConf.txmode.offloads |= DEV_TX_OFFLOAD_MULTI_SEGS; */
+#endif
 	}
 	else
 	{
-		// for dpdk >= 18
-/*		portConf.rxmode.jumbo_frame = DPDK_CONFIG_JUMBO_FRAME; */
+#if RTE_VERSION < RTE_VERSION_NUM(18, 0, 0, 0)
+		portConf.rxmode.jumbo_frame = 0;
+#endif
 		portConf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
 	}
 	portConf.rxmode.hw_strip_crc = DPDK_CONFIG_HW_STRIP_CRC;
