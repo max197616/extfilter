@@ -46,6 +46,8 @@ my $only_original_ssl_ip = $Config->{'APP.only_original_ssl_ip'} || "false";
 $only_original_ssl_ip = lc($only_original_ssl_ip);
 my $make_sp_chars = $Config->{'APP.make_sp_chars'} || "false";
 $make_sp_chars = lc($make_sp_chars);
+my $ips_to_hosts = lc($Config->{'APP.ips_to_hosts'} || "false");
+my $nets_to_hosts = lc($Config->{'APP.nets_to_hosts'} || "false");
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
 $dbh->do("set names utf8");
@@ -270,6 +272,8 @@ if($n)
 	print $PROTOS_FILE "\@SSL\n";
 }
 
+ips_to_hosts() if($ips_to_hosts eq "true");
+nets_to_hosts() if($nets_to_hosts eq "true");
 
 close $DOMAINS_FILE;
 close $URLS_FILE;
@@ -471,3 +475,30 @@ sub treeFindDomain
 	return $r->{'.'} || 0;
 }
 
+sub ips_to_hosts
+{
+	my $sth = $dbh->prepare("SELECT ip FROM zap2_only_ips");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
+	{
+		my $ip = get_ip($ips->{ip});
+		if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+		{
+			print $HOSTS_FILE "$ip", ", 6/0xfe", "\n";
+		} else {
+			print $HOSTS_FILE "[$ip]", ", 6/0xfe", "\n";
+		}
+	}
+	$sth->finish();
+}
+
+sub nets_to_hosts
+{
+	my $sth = $dbh->prepare("SELECT subnet FROM zap2_subnets");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
+	{
+		print $HOSTS_FILE "$ips->{subnet}", ", 6/0xfe", "\n";
+	}
+	$sth->finish();
+}
