@@ -1,3 +1,22 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
 #include <cinttypes>
 #include "cmdlinetask.h"
 #include <Poco/Exception.h>
@@ -14,6 +33,7 @@
 #include <pthread.h>
 #include "notification.h"
 #include "main.h"
+#include "cfg.h"
 #include <Poco/Net/NetException.h>
 
 #include <iostream>
@@ -341,11 +361,33 @@ struct cmd_showworker_result
 	cmdline_fixed_string_t option;
 };
 
+extern "C" uint32_t ssl_max_packet_size;
+extern "C" uint64_t ssl_mallocs;
+extern "C" uint64_t ssl_reallocs;
+
 static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 {
 	cmdline_printf(cl, "  Seen packets: %" PRIu64 "\n", stats.total_packets);
 	cmdline_printf(cl, "  IP packets: %" PRIu64 " (IPv4 packets: %" PRIu64 ", IPv6 packets: %" PRIu64 ")\n", stats.ip_packets, stats.ipv4_packets, stats.ipv6_packets);
 	cmdline_printf(cl, "  Total bytes: %" PRIu64 "\n", stats.total_bytes);
+	cmdline_printf(cl, "  HTTP packets: %" PRIu64 "\n", stats.http_packets);
+	cmdline_printf(cl, "  SSL/TLS packets: %" PRIu64 "\n", stats.ssl_packets);
+	cmdline_printf(cl, "  SSL/TLS partial packets: %" PRIu64 "\n", stats.dpi_ssl_partial_packets);
+
+	cmdline_printf(cl, "  DPI parsers:\n");
+	cmdline_printf(cl, "    Allocs:\n");
+	cmdline_printf(cl, "      HTTP: %" PRIu64 "\n", stats.dpi_alloc_http);
+	cmdline_printf(cl, "      SSL: %" PRIu64 "\n", stats.dpi_alloc_ssl);
+	cmdline_printf(cl, "    Memory pools usage:\n");
+	cmdline_printf(cl, "      HTTP: %d\n", rte_mempool_in_use_count(common_data->mempools.http_entries.mempool));
+	cmdline_printf(cl, "      SSL: %d\n", rte_mempool_in_use_count(common_data->mempools.ssl_entries.mempool));
+	cmdline_printf(cl, "    Memory pools free:\n");
+	cmdline_printf(cl, "      HTTP: %d\n", rte_mempool_avail_count(common_data->mempools.http_entries.mempool));
+	cmdline_printf(cl, "      SSL: %d\n", rte_mempool_avail_count(common_data->mempools.ssl_entries.mempool));
+	cmdline_printf(cl, "  DPI errors:\n");
+	cmdline_printf(cl, "    No memory http: %" PRIu64 "\n",stats.dpi_no_mempool_http);
+	cmdline_printf(cl, "    No memory ssl: %" PRIu64 "\n",stats.dpi_no_mempool_ssl);
+
 	if(stats.ip_packets && stats.total_bytes)
 	{
 		uint32_t avg_pkt_size = (unsigned int)(stats.total_bytes/stats.ip_packets);
@@ -357,25 +399,203 @@ static void display_worker_stats(struct cmdline* cl,const ThreadStats &stats)
 	cmdline_printf(cl, "  IPv4 short packets: %" PRIu64 "\n", stats.ipv4_short_packets);
 	cmdline_printf(cl, "  Matched by:\n");
 	cmdline_printf(cl, "    ACL ip/port: %" PRIu64 "\n", stats.matched_ip_port);
-	cmdline_printf(cl, "    SSL: %" PRIu64 "\n", stats.matched_ssl);
+	cmdline_printf(cl, "    SSL SNI: %" PRIu64 "\n", stats.matched_ssl_sni);
 	cmdline_printf(cl, "    ACL SSL: %" PRIu64 "\n", stats.matched_ssl_ip);
-	cmdline_printf(cl, "    domain: %" PRIu64 "\n", stats.matched_domains);
-	cmdline_printf(cl, "    URL: %" PRIu64 "\n", stats.matched_urls);
+	cmdline_printf(cl, "    HTTP: %" PRIu64 "\n", stats.matched_http_bl_ipv4 + stats.matched_http_bl_ipv6);
+	cmdline_printf(cl, "      IPv4: %" PRIu64 "\n", stats.matched_http_bl_ipv4);
+	cmdline_printf(cl, "      IPv6: %" PRIu64 "\n", stats.matched_http_bl_ipv6);
 	cmdline_printf(cl, "  Redirected:\n");
-	cmdline_printf(cl, "    domains: %" PRIu64 "\n", stats.redirected_domains);
-	cmdline_printf(cl, "    URLs: %" PRIu64 "\n",stats.redirected_urls);
-	cmdline_printf(cl, "  Sended rst: %" PRIu64 "\n",stats.sended_rst);
-	cmdline_printf(cl, "  Maximum active flows:\n");
-	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.max_ipv4_flows);
-	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.max_ipv6_flows);
-	cmdline_printf(cl, "  Active flows: %" PRIu64 "\n", stats.ndpi_flows_count);
-	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n", stats.ndpi_ipv4_flows_count);
-	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n", stats.ndpi_ipv6_flows_count);
-	cmdline_printf(cl, "  Flows deleted: %" PRIu64 "\n", stats.ndpi_flows_deleted);
-	cmdline_printf(cl, "  Flows expired: %" PRIu64 "\n", stats.ndpi_flows_expired);
-	cmdline_printf(cl, "  Reassembled flows: %" PRIu64 "\n", stats.reassembled_flows);
-	cmdline_printf(cl, "  Use malloc for url: %" PRIu64 "\n", stats.dpi_use_url_malloc);
-	cmdline_printf(cl, "  Bad alloc for URL: %" PRIu64 "\n", stats.dpi_no_mempool_http);
+	cmdline_printf(cl, "    HTTP blacklisted: %" PRIu64 "\n", stats.redirected_http_bl_ipv4 + stats.redirected_http_bl_ipv6);
+	cmdline_printf(cl, "      IPv4: %" PRIu64 "\n", stats.redirected_http_bl_ipv4);
+	cmdline_printf(cl, "      IPv6: %" PRIu64 "\n", stats.redirected_http_bl_ipv6);
+	cmdline_printf(cl, "  Sended rst:\n");
+	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n",stats.sended_rst_ipv4);
+	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n",stats.sended_rst_ipv6);
+	cmdline_printf(cl, "  Sended forbidden:\n");
+	cmdline_printf(cl, "    IPv4: %" PRIu64 "\n",stats.sended_forbidden_ipv4);
+	cmdline_printf(cl, "    IPv6: %" PRIu64 "\n",stats.sended_forbidden_ipv6);
+	cmdline_printf(cl, "  Already blocked:\n");
+	cmdline_printf(cl, "    IPv4:\n");
+	cmdline_printf(cl, "      HTTP : %" PRIu64 "\n", stats.seen_already_blocked_http_ipv4);
+	cmdline_printf(cl, "      SSL  : %" PRIu64 "\n", stats.seen_already_blocked_ssl_ipv4);
+	cmdline_printf(cl, "    IPv6:\n");
+	cmdline_printf(cl, "      HTTP : %" PRIu64 "\n", stats.seen_already_blocked_http_ipv6);
+	cmdline_printf(cl, "      SSL  : %" PRIu64 "\n", stats.seen_already_blocked_ssl_ipv6);
+	cmdline_printf(cl, "  Flows:\n");
+	cmdline_printf(cl, "    IPv4:\n");
+	cmdline_printf(cl, "      New:       %" PRIu64 "\n", stats.new_flow);
+	cmdline_printf(cl, "      Recycling: %" PRIu64 "\n", stats.recycling_flow);
+	cmdline_printf(cl, "      Reuse:     %" PRIu64 "\n", stats.reuse_flow);
+	cmdline_printf(cl, "      Close:     %" PRIu64 "\n", stats.close_flow);
+	cmdline_printf(cl, "      No create: %" PRIu64 "\n", stats.no_create_flow);
+	cmdline_printf(cl, "      No memory: %" PRIu64 "\n", stats.error_alloc_flow);
+	cmdline_printf(cl, "      Alfs fail: %" PRIu64 "\n", stats.alfs_fail_flow);
+	cmdline_printf(cl, "    IPv6:\n");
+	cmdline_printf(cl, "      New:       %" PRIu64 "\n", stats.new_flow_ipv6);
+	cmdline_printf(cl, "      Recycling: %" PRIu64 "\n", stats.recycling_flow_ipv6);
+	cmdline_printf(cl, "      Reuse:     %" PRIu64 "\n", stats.reuse_flow_ipv6);
+	cmdline_printf(cl, "      Close:     %" PRIu64 "\n", stats.close_flow_ipv6);
+	cmdline_printf(cl, "      No create: %" PRIu64 "\n", stats.no_create_flow_ipv6);
+	cmdline_printf(cl, "      No memory: %" PRIu64 "\n", stats.error_alloc_flow_ipv6);
+	cmdline_printf(cl, "      Alfs fail: %" PRIu64 "\n", stats.alfs_fail_flow_ipv6);
+
+}
+
+static uint32_t total_allocated_flows_ipv4 = 0;
+static uint64_t total_reused_flows_ipv4 = 0;
+static uint32_t total_allocated_flows_ipv6 = 0;
+static uint64_t total_reused_flows_ipv6 = 0;
+
+static uint32_t alfs_short_allocated_ipv4 = 0;
+static uint64_t alfs_short_oldest_ipv4 = 0;
+static uint64_t alfs_short_alien_ipv4 = 0;
+static uint64_t alfs_short_error_ipv4 = 0;
+
+static uint32_t alfs_long_allocated_ipv4 = 0;
+static uint64_t alfs_long_oldest_ipv4 = 0;
+static uint64_t alfs_long_alien_ipv4 = 0;
+static uint64_t alfs_long_error_ipv4 = 0;
+
+static uint32_t alfs_short_allocated_ipv6 = 0;
+static uint64_t alfs_short_oldest_ipv6 = 0;
+static uint64_t alfs_short_alien_ipv6 = 0;
+static uint64_t alfs_short_error_ipv6 = 0;
+
+static uint32_t alfs_long_allocated_ipv6 = 0;
+static uint64_t alfs_long_oldest_ipv6 = 0;
+static uint64_t alfs_long_alien_ipv6 = 0;
+static uint64_t alfs_long_error_ipv6 = 0;
+
+static void display_worker_memory_stats(struct cmdline *cl, uint8_t worker_id)
+{
+	cmdline_printf(cl, "  Flows memory usage:\n");
+	cmdline_printf(cl, "    IPv4:\n");
+	cmdline_printf(cl, "      Parameters:\n");
+	cmdline_printf(cl, "        Total:        %" PRIu32 "\n", global_prm->memory_configs.ipv4.flows_number);
+	cmdline_printf(cl, "        Parts:        %d\n", (int) global_prm->memory_configs.ipv4.parts_of_flow);
+	cmdline_printf(cl, "        Parts mask:   %" PRIu32 "\n", global_prm->memory_configs.ipv4.mask_parts_flow);
+	cmdline_printf(cl, "        Cache size:   %" PRIu32 "\n", global_prm->memory_configs.ipv4.recs_number);
+	cmdline_printf(cl, "      Current usage:\n");
+
+	cmdline_printf(cl, "        Per part:\n");
+	uint32_t total_allocated = 0;
+	uint64_t total_reused = 0;
+	for(int i=0; i < global_prm->memory_configs.ipv4.parts_of_flow; i++)
+	{
+		cmdline_printf(cl, "          Part %d:\n", i);
+		FlowStorageIPV4 *fs_ipv4 = (FlowStorageIPV4 *) worker_params[worker_id].flows_ipv4.flows[i];
+		cmdline_printf(cl, "            Allocated: %" PRIu32 "\n", fs_ipv4->counters.alloc);
+		cmdline_printf(cl, "            Reused:    %" PRIu64 "\n", fs_ipv4->counters.reuse);
+		total_allocated += fs_ipv4->counters.alloc;
+		total_reused += fs_ipv4->counters.reuse;
+		cmdline_printf(cl, "            Alfs:\n");
+		cmdline_printf(cl, "              Short:\n");
+		cmdline_printf(cl, "                Allctd: %" PRIu32 "\n", fs_ipv4->short_alfs.getAllocated());
+		cmdline_printf(cl, "                Oldest: %" PRIu64 "\n", fs_ipv4->short_alfs.counters.oldest);
+		cmdline_printf(cl, "                Alien:  %" PRIu64 "\n", fs_ipv4->short_alfs.counters.alien_rec);
+		cmdline_printf(cl, "                No mem: %" PRIu64 "\n", fs_ipv4->short_alfs.counters.err_alloc);
+		cmdline_printf(cl, "              Long:\n");
+		cmdline_printf(cl, "                Allctd: %" PRIu32 "\n", fs_ipv4->long_alfs.getAllocated());
+		cmdline_printf(cl, "                Oldest: %" PRIu64 "\n", fs_ipv4->long_alfs.counters.oldest);
+		cmdline_printf(cl, "                Alien:  %" PRIu64 "\n", fs_ipv4->long_alfs.counters.alien_rec);
+		cmdline_printf(cl, "                No mem: %" PRIu64 "\n", fs_ipv4->long_alfs.counters.err_alloc);
+		alfs_short_allocated_ipv4 += fs_ipv4->short_alfs.getAllocated();
+		alfs_short_oldest_ipv4 += fs_ipv4->short_alfs.counters.oldest;
+		alfs_short_alien_ipv4 += fs_ipv4->short_alfs.counters.alien_rec;
+		alfs_short_error_ipv4 += fs_ipv4->short_alfs.counters.err_alloc;
+
+		alfs_long_allocated_ipv4 += fs_ipv4->long_alfs.getAllocated();
+		alfs_long_oldest_ipv4 += fs_ipv4->long_alfs.counters.oldest;
+		alfs_long_alien_ipv4 += fs_ipv4->long_alfs.counters.alien_rec;
+		alfs_long_error_ipv4 += fs_ipv4->long_alfs.counters.err_alloc;
+
+	}
+	total_allocated_flows_ipv4 += total_allocated;
+	total_reused_flows_ipv4 += total_reused;
+	cmdline_printf(cl, "        All parts:\n");
+	cmdline_printf(cl, "          Allocated:    %" PRIu32 "\n", total_allocated);
+	cmdline_printf(cl, "          Reused:       %" PRIu64 "\n", total_reused);
+
+	cmdline_printf(cl, "    IPv6:\n");
+	cmdline_printf(cl, "      Parameters:\n");
+	cmdline_printf(cl, "        Total:        %" PRIu32 "\n", global_prm->memory_configs.ipv6.flows_number);
+	cmdline_printf(cl, "        Parts:        %d\n", (int) global_prm->memory_configs.ipv6.parts_of_flow);
+	cmdline_printf(cl, "        Parts mask:   %" PRIu32 "\n", global_prm->memory_configs.ipv6.mask_parts_flow);
+	cmdline_printf(cl, "        Cache size:   %" PRIu32 "\n", global_prm->memory_configs.ipv6.recs_number);
+	cmdline_printf(cl, "      Current usage:\n");
+
+	cmdline_printf(cl, "        Per part:\n");
+
+	uint32_t total_allocated_ipv6 = 0;
+	uint64_t total_reused_ipv6 = 0;
+
+	for(int i=0; i < global_prm->memory_configs.ipv6.parts_of_flow; i++)
+	{
+		cmdline_printf(cl, "          Part %d:\n", i);
+		FlowStorageIPV6 *fs_ipv6 = (FlowStorageIPV6 *) worker_params[worker_id].flows_ipv6.flows[i];
+		cmdline_printf(cl, "            Allocated: %" PRIu32 "\n", fs_ipv6->counters.alloc);
+		cmdline_printf(cl, "            Reused:    %" PRIu64 "\n", fs_ipv6->counters.reuse);
+		total_allocated_ipv6 += fs_ipv6->counters.alloc;
+		total_reused_ipv6 += fs_ipv6->counters.reuse;
+		cmdline_printf(cl, "            Alfs:\n");
+		cmdline_printf(cl, "              Short:\n");
+		cmdline_printf(cl, "                Allctd: %" PRIu32 "\n", fs_ipv6->short_alfs.getAllocated());
+		cmdline_printf(cl, "                Oldest: %" PRIu64 "\n", fs_ipv6->short_alfs.counters.oldest);
+		cmdline_printf(cl, "                Alien:  %" PRIu64 "\n", fs_ipv6->short_alfs.counters.alien_rec);
+		cmdline_printf(cl, "                No mem: %" PRIu64 "\n", fs_ipv6->short_alfs.counters.err_alloc);
+		cmdline_printf(cl, "              Long:\n");
+		cmdline_printf(cl, "                Allctd: %" PRIu32 "\n", fs_ipv6->long_alfs.getAllocated());
+		cmdline_printf(cl, "                Oldest: %" PRIu64 "\n", fs_ipv6->long_alfs.counters.oldest);
+		cmdline_printf(cl, "                Alien:  %" PRIu64 "\n", fs_ipv6->long_alfs.counters.alien_rec);
+		cmdline_printf(cl, "                No mem: %" PRIu64 "\n", fs_ipv6->long_alfs.counters.err_alloc);
+		alfs_short_allocated_ipv6 += fs_ipv6->short_alfs.getAllocated();
+		alfs_short_oldest_ipv6 += fs_ipv6->short_alfs.counters.oldest;
+		alfs_short_alien_ipv6 += fs_ipv6->short_alfs.counters.alien_rec;
+		alfs_short_error_ipv6 += fs_ipv6->short_alfs.counters.err_alloc;
+		alfs_long_allocated_ipv6 += fs_ipv6->long_alfs.getAllocated();
+		alfs_long_oldest_ipv6 += fs_ipv6->long_alfs.counters.oldest;
+		alfs_long_alien_ipv6 += fs_ipv6->long_alfs.counters.alien_rec;
+		alfs_long_error_ipv6 += fs_ipv6->long_alfs.counters.err_alloc;
+	}
+	total_allocated_flows_ipv6 += total_allocated_ipv6;
+	total_reused_flows_ipv6 += total_reused_ipv6;
+	cmdline_printf(cl, "        All parts:\n");
+	cmdline_printf(cl, "          Allocated:    %" PRIu32 "\n", total_allocated_ipv6);
+	cmdline_printf(cl, "          Reused:       %" PRIu64 "\n", total_reused_ipv6);
+}
+
+static void display_worker_memory_stats_all(struct cmdline *cl)
+{
+	cmdline_printf(cl, "    Total alfs ipv4:\n");
+	cmdline_printf(cl, "      Short:\n");
+	cmdline_printf(cl, "        Allctd: %" PRIu32 "\n", alfs_short_allocated_ipv4);
+	cmdline_printf(cl, "        Oldest: %" PRIu64 "\n", alfs_short_oldest_ipv4);
+	cmdline_printf(cl, "        Alien:  %" PRIu64 "\n", alfs_short_alien_ipv4);
+	cmdline_printf(cl, "        No mem: %" PRIu64 "\n", alfs_short_error_ipv4);
+	cmdline_printf(cl, "      Long:\n");
+	cmdline_printf(cl, "        Allctd: %" PRIu32 "\n", alfs_long_allocated_ipv4);
+	cmdline_printf(cl, "        Oldest: %" PRIu64 "\n", alfs_long_oldest_ipv4);
+	cmdline_printf(cl, "        Alien:  %" PRIu64 "\n", alfs_long_alien_ipv4);
+	cmdline_printf(cl, "        No mem: %" PRIu64 "\n", alfs_long_error_ipv4);
+
+	cmdline_printf(cl, "    Total alfs ipv6:\n");
+	cmdline_printf(cl, "      Short:\n");
+	cmdline_printf(cl, "        Allctd: %" PRIu32 "\n", alfs_short_allocated_ipv6);
+	cmdline_printf(cl, "        Oldest: %" PRIu64 "\n", alfs_short_oldest_ipv6);
+	cmdline_printf(cl, "        Alien:  %" PRIu64 "\n", alfs_short_alien_ipv6);
+	cmdline_printf(cl, "        No mem: %" PRIu64 "\n", alfs_short_error_ipv6);
+	cmdline_printf(cl, "      Long:\n");
+	cmdline_printf(cl, "        Allctd: %" PRIu32 "\n", alfs_long_allocated_ipv6);
+	cmdline_printf(cl, "        Oldest: %" PRIu64 "\n", alfs_long_oldest_ipv6);
+	cmdline_printf(cl, "        Alien:  %" PRIu64 "\n", alfs_long_alien_ipv6);
+	cmdline_printf(cl, "        No mem: %" PRIu64 "\n", alfs_long_error_ipv6);
+
+	cmdline_printf(cl, "    Total allocated ipv4 flows: %" PRIu32 "\n", total_allocated_flows_ipv4);
+	cmdline_printf(cl, "    Total allocated ipv6 flows: %" PRIu32 "\n", total_allocated_flows_ipv6);
+	cmdline_printf(cl, "    Total reused ipv4 flows: %" PRIu64 "\n", total_reused_flows_ipv4);
+	cmdline_printf(cl, "    Total reused ipv6 flows: %" PRIu64 "\n", total_reused_flows_ipv6);
+	cmdline_printf(cl, "    Free ipv4 flows: %" PRIu32 "\n", (global_prm->memory_configs.ipv4.flows_number - total_allocated_flows_ipv4));
+	cmdline_printf(cl, "    Free ipv6 flows: %" PRIu32 "\n", (global_prm->memory_configs.ipv6.flows_number - total_allocated_flows_ipv6));
 }
 
 static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void* data)
@@ -418,15 +638,64 @@ static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void*
 				cmdline_printf(cl, "\n");
 			}
 		} else {
-			int core_id = ::atoi(res->workernum);
+			int worker_id = ::atoi(res->workernum);
 			extFilter *f = extFilter::instance();
 			for(auto const &thread : f->getThreadsVec())
 			{
-				if(core_id == (int)thread->getCoreId())
+				if(worker_id == (static_cast<WorkerThread*>(thread))->getWorkerID())
 				{
 					const ThreadStats stats=(static_cast<WorkerThread*>(thread))->getStats();
 					cmdline_printf(cl, "Worker '%s' on core %d\n", (static_cast<WorkerThread*>(thread))->getThreadName().c_str(), (int)thread->getCoreId());
 					display_worker_stats(cl, stats);
+					cmdline_printf(cl, "\n");
+				}
+			}
+		}
+	} else if (!strcmp(res->what, "memory"))
+	{
+		total_allocated_flows_ipv4 = 0;
+		total_allocated_flows_ipv6 = 0;
+
+		alfs_short_allocated_ipv4 = 0;
+		alfs_short_oldest_ipv4 = 0;
+		alfs_short_alien_ipv4 = 0;
+		alfs_short_error_ipv4 = 0;
+		alfs_short_allocated_ipv6 = 0;
+		alfs_short_oldest_ipv6 = 0;
+		alfs_short_alien_ipv6 = 0;
+		alfs_short_error_ipv6 = 0;
+
+		alfs_long_allocated_ipv4 = 0;
+		alfs_long_oldest_ipv4 = 0;
+		alfs_long_alien_ipv4 = 0;
+		alfs_long_error_ipv4 = 0;
+
+		alfs_long_allocated_ipv6 = 0;
+		alfs_long_oldest_ipv6 = 0;
+		alfs_long_alien_ipv6 = 0;
+		alfs_long_error_ipv6 = 0;
+
+		if(!strcmp(res->workernum,"all"))
+		{
+			extFilter *f = extFilter::instance();
+			cmdline_printf(cl, "Working %lu workers:\n", f->getThreadsVec().size());
+			for(auto const &thread : f->getThreadsVec())
+			{
+				cmdline_printf(cl, "Worker '%s' on core %d\n", (static_cast<WorkerThread*>(thread))->getThreadName().c_str(), (int)thread->getCoreId());
+				display_worker_memory_stats(cl, (static_cast<WorkerThread*>(thread))->getWorkerID());
+				cmdline_printf(cl, "\n");
+			}
+			display_worker_memory_stats_all(cl);
+			cmdline_printf(cl, "\n");
+		} else {
+			int worker_id = ::atoi(res->workernum);
+			extFilter *f = extFilter::instance();
+			for(auto const &thread : f->getThreadsVec())
+			{
+				if(worker_id == (static_cast<WorkerThread*>(thread))->getWorkerID())
+				{
+					cmdline_printf(cl, "Worker '%s' on core %d\n", (static_cast<WorkerThread*>(thread))->getThreadName().c_str(), (int)thread->getCoreId());
+					display_worker_memory_stats(cl, (static_cast<WorkerThread*>(thread))->getWorkerID());
 					cmdline_printf(cl, "\n");
 				}
 			}
@@ -436,7 +705,7 @@ static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void*
 
 cmdline_parse_token_string_t cmd_showworker_show = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, show, "show#clear");
 cmdline_parse_token_string_t cmd_showworker_worker = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, worker, "worker");
-cmdline_parse_token_string_t cmd_showworker_what = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, what, "stats");
+cmdline_parse_token_string_t cmd_showworker_what = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, what, "stats#memory");
 cmdline_parse_token_string_t cmd_showworker_workernum = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, workernum, NULL);
 cmdline_parse_token_string_t cmd_showworker_option = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, option, "-j#json");
 
@@ -446,7 +715,7 @@ static cmdline_parse_inst_t * init_cmd_showworker_json()
 	cmd_showport = (cmdline_parse_inst_t *)calloc(1, sizeof(cmdline_parse_inst_t) + sizeof(void *) * 6);
 	cmd_showport->f = cmd_showworker_parsed;
 	cmd_showport->data = (void *)1;
-	cmd_showport->help_str = "show|clear worker stats X (X = core id or all) -j|json";
+	cmd_showport->help_str = "show|clear worker stats|memory X (X = core id or all) -j|json";
 	cmd_showport->tokens[0] = &cmd_showworker_show.hdr;
 	cmd_showport->tokens[1] = &cmd_showworker_worker.hdr;
 	cmd_showport->tokens[2] = &cmd_showworker_what.hdr;
@@ -462,7 +731,7 @@ static cmdline_parse_inst_t * init_cmd_showworker()
 	cmd_showport = (cmdline_parse_inst_t *)calloc(1, sizeof(cmdline_parse_inst_t) + sizeof(void *) * 5);
 	cmd_showport->f = cmd_showworker_parsed;
 	cmd_showport->data = nullptr;
-	cmd_showport->help_str = "show|clear worker stats X (X = core id or all)";
+	cmd_showport->help_str = "show|clear worker stats|memory X (X = core id or all)";
 	cmd_showport->tokens[0] = &cmd_showworker_show.hdr;
 	cmd_showport->tokens[1] = &cmd_showworker_worker.hdr;
 	cmd_showport->tokens[2] = &cmd_showworker_what.hdr;

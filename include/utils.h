@@ -19,23 +19,6 @@
 
 #pragma once
 
-enum port_types
-{
-	P_TYPE_SUBSCRIBER,
-	P_TYPE_NETWORK,
-	P_TYPE_SENDER
-};
+#include <cstddef>
 
-enum operation_modes
-{
-	OP_MODE_MIRROR,
-	OP_MODE_INLINE
-};
-
-struct rte_mempool;
-
-struct pool_holder_t
-{
-	rte_mempool *mempool;
-};
-
+std::size_t url_encode(char *buf, const char *from, std::size_t len, std::size_t buf_size);

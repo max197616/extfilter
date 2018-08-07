@@ -29,7 +29,7 @@ extFilter
 ```
 - Запустить configure
 ```bash
-./configure --with-dpdk_target=<target> --with-dpdk_home=<path_to_compiled_dpdk>
+./configure --with-dpdk_target=<target> --with-dpdk_home=<path_to_compiled_dpdk> --enable-native-code
 ```
 - Скомпилировать программу
 ```bash

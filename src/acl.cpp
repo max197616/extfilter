@@ -1,5 +1,28 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <Poco/FileStream.h>
+#include <Poco/Net/IPAddress.h>
 #include "acl.h"
+#include "main.h"
 
 struct rte_acl_ctx* ACL::ipv4_acx[NB_SOCKETS];
 struct rte_acl_ctx* ACL::ipv6_acx[NB_SOCKETS];
@@ -61,7 +84,7 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 
 	acl_build_param.num_categories = DEFAULT_MAX_CATEGORIES;
 	acl_build_param.num_fields = dim;
-	memcpy(&acl_build_param.defs, ipv6 ? ipv6_defs : ipv4_defs,
+	rte_memcpy(&acl_build_param.defs, ipv6 ? ipv6_defs : ipv4_defs,
 	       ipv6 ? sizeof(ipv6_defs) : sizeof(ipv4_defs));
 
 	if (rte_acl_build(context, &acl_build_param) != 0)
@@ -142,6 +165,31 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						} else {
 							found = str.find(":");
 						}
+						uint8_t proto = IPPROTO_TCP;
+						uint8_t proto_mask = 0xff;
+						std::size_t found_comma = str.find(",");
+						if(found_comma != std::string::npos)
+						{
+							std::string protocol_str = str.substr(found_comma + 1, str.length());
+							str.erase(found_comma, str.length() - found_comma);
+							std::size_t found_sl = protocol_str.find("/");
+							if(found_sl != std::string::npos)
+							{
+								std::string p_mask = protocol_str.substr(found_sl + 1, protocol_str.length());
+								std::string p = protocol_str.substr(0, found_sl);
+								long int p_mask_b = std::strtol(p_mask.c_str(),NULL, 0);
+								long int p_b = std::strtol(p.c_str(), NULL, 0);
+								if(p_mask_b > 255 || p_b > 255)
+								{
+									_logger.warning("Bad protocol/mask (value > 255) in line %d", lineno);
+								} else {
+									proto = p_b;
+									proto_mask = p_mask_b;
+								}
+							} else {
+								_logger.warning("Bad protocol/mask in line %d", lineno);
+							}
+						}
 						std::string ip=str.substr(first_pos, ipv6 ? found-1 : found);
 						std::size_t found_slash=ip.find("/");
 						uint32_t def_mask=0;
@@ -182,8 +230,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
 						{
 							struct ACL::acl4_rule rule;
-							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = IPPROTO_TCP;
-							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = 0xff;
+							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = proto;
+							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = proto_mask;
 							if(entry.second == ACL::ACL_NOTIFY)
 							{
 								rule.field[ACL::DST_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
@@ -222,8 +270,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 						} else if (ip_addr.family() == Poco::Net::IPAddress::IPv6)
 						{
 							struct ACL::acl6_rule rule;
-							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = IPPROTO_TCP;
-							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = 0xff;
+							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = proto;
+							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = proto_mask;
 							_parse_ipv6((uint32_t *)&def_ipv6, rule.field + SRC1_FIELD_IPV6, 0);
 							_parse_ipv6((uint32_t *)ip_addr.addr(), rule.field + DST1_FIELD_IPV6, def_mask ? def_mask : 128);
 
@@ -261,7 +309,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 		int z = 0;
 		for(auto i=acl4_rules.begin(); i != acl4_rules.end(); i++)
 		{
-			memcpy((uint8_t *)ipv4_rules+z*sizeof(struct ACL::acl4_rule), &(*i), sizeof(struct ACL::acl4_rule));
+			rte_memcpy((uint8_t *)ipv4_rules+z*sizeof(struct ACL::acl4_rule), &(*i), sizeof(struct ACL::acl4_rule));
 			z++;
 		}
 	}
@@ -281,7 +329,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 		int z = 0;
 		for(auto i=acl6_rules.begin(); i != acl6_rules.end(); i++)
 		{
-			memcpy((uint8_t *)ipv6_rules+z*sizeof(struct ACL::acl6_rule), &(*i), sizeof(struct ACL::acl6_rule));
+			rte_memcpy((uint8_t *)ipv6_rules+z*sizeof(struct ACL::acl6_rule), &(*i), sizeof(struct ACL::acl6_rule));
 			z++;
 		}
 	}

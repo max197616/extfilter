@@ -17,25 +17,33 @@
 *
 */
 
-#pragma once
+#include "utils.h"
 
-enum port_types
+#include <ctype.h>
+static char hex_chars[]="0123456789ABCDEF";
+
+std::size_t url_encode(char *buf, const char *from, std::size_t len, std::size_t buf_size)
 {
-	P_TYPE_SUBSCRIBER,
-	P_TYPE_NETWORK,
-	P_TYPE_SENDER
-};
-
-enum operation_modes
-{
-	OP_MODE_MIRROR,
-	OP_MODE_INLINE
-};
-
-struct rte_mempool;
-
-struct pool_holder_t
-{
-	rte_mempool *mempool;
-};
-
+	std::size_t res = 0;
+	if(from)
+	{
+		while (*from != 0 && len > 0 && buf_size > 0)
+		{
+			res++;
+			buf_size--;
+			if(isalnum(*from) || *from == '-' || *from == '_' || *from == '.' || *from == '~')
+				*buf++ = *from;
+			else {
+				*buf++ = '%';
+				*buf++ = hex_chars[(*from >> 4) & 0x0f];
+				*buf++ = hex_chars[*from & 0x0f];
+				res += 2;
+				buf_size -= 2;
+			}
+			from++;
+			len--;
+		}
+	}
+	*buf = 0;
+	return res;
+}

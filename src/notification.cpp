@@ -1,3 +1,22 @@
+/*
+*
+*    Copyright (C) Max <max1976@mail.ru>
+*
+*    This program is free software: you can redistribute it and/or modify
+*    it under the terms of the GNU General Public License as published by
+*    the Free Software Foundation, either version 3 of the License, or
+*    (at your option) any later version.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU General Public License for more details.
+*
+*    You should have received a copy of the GNU General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*/
+
 #include "notification.h"
 #include <rte_config.h>
 #include <rte_cycles.h>
@@ -99,7 +118,7 @@ void NotifyManager::runTask()
 				{
 					_logger.error("Unable to find sender for group with id %d", notify_group);
 				} else {
-					r->second->Redirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), pNotifyNf->additional_param().c_str());
+					r->second->HTTPRedirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), pNotifyNf->additional_param().c_str(), pNotifyNf->additional_param().length());
 //					struct redirect_params rp = r->second;
 //					std::string full_url("@HTTP/1.1 "+rp.code+"\r\nLocation: " + rp.redirect_url + pNotifyNf->additional_param() + "\r\nConnection: close\r\n");
 //					sender->Redirect(pNotifyNf->user_port(), pNotifyNf->dst_port(), pNotifyNf->user_ip(), pNotifyNf->dst_ip(), pNotifyNf->ip_version(), pNotifyNf->acknum(), pNotifyNf->seqnum(), pNotifyNf->f_psh(), full_url);

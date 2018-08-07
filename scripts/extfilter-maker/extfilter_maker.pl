@@ -46,6 +46,8 @@ my $only_original_ssl_ip = $Config->{'APP.only_original_ssl_ip'} || "false";
 $only_original_ssl_ip = lc($only_original_ssl_ip);
 my $make_sp_chars = $Config->{'APP.make_sp_chars'} || "false";
 $make_sp_chars = lc($make_sp_chars);
+my $ips_to_hosts = lc($Config->{'APP.ips_to_hosts'} || "false");
+my $nets_to_hosts = lc($Config->{'APP.nets_to_hosts'} || "false");
 
 my $dbh = DBI->connect("DBI:mysql:database=".$db_name.";host=".$db_host,$db_user,$db_pass,{mysql_enable_utf8 => 1}) or die DBI->errstr;
 $dbh->do("set names utf8");
@@ -93,8 +95,6 @@ while (my $ips = $sth->fetchrow_hashref())
 	$dm =~ s/\\//g;
 	my $uri = new URI("http://".$dm);
 	my $domain_canonical = lc($uri->host());
-	$domain_canonical =~ s/^http\:\/\///;
-	$domain_canonical =~ s/\/$//;
 	treeAddDomain(\%domains, "*.".$domain_canonical, 1);
 	print $DOMAINS_FILE "*.",$domain_canonical,"\n";
 	if($domains_ssl eq "true")
@@ -140,6 +140,14 @@ $sth->execute;
 while (my $ips = $sth->fetchrow_hashref())
 {
 	my $url2=$ips->{url};
+	# cut from first &#
+	if((my $idx=index($url2,"&#")) != -1)
+	{
+		$url2 = substr($url2, 0, $idx);
+	}
+	# delete fragment
+	$url2 =~ s/^(.*)\#(.*)$/$1/;
+
 	my $url1=new URI($url2);
 	my $scheme=$url1->scheme();
 	if($scheme !~ /http/ && $scheme !~ /https/)
@@ -207,46 +215,38 @@ while (my $ips = $sth->fetchrow_hashref())
 	}
 
 	$url1->host($host);
+	my $as_str = $url1->as_string();
+	$path =~ s/\/+/\//g;
+	$path =~ s/http\:\//http\:\/\//g;
+	$url1->path($path);
+
 	my $url11 = $url1->canonical();
 
 	$url11 =~ s/^http\:\/\///;
 	$url2 =~ s/^http\:\/\///;
-
-	# убираем любое упоминание о фрагменте... оно не нужно
-	$url11 =~ s/^(.*)\#(.*)$/$1/g;
-	$url2 =~ s/^(.*)\#(.*)$/$1/g;
-
-	if((my $idx=index($url11,"&#")) != -1)
-	{
-		$url11 = substr($url11, 0, $idx);
-	}
-	if((my $idx=index($url2,"&#")) != -1)
-	{
-		$url2 = substr($url2,0,$idx);
-	}
+	$as_str =~ s/^http\:\/\///;
 
 	$url2 .= "/" if($url2 !~ /\//);
 
-	$url11 =~ s/\/+/\//g;
-	$url2 =~ s/\/+/\//g;
-
-	$url11 =~ s/http\:\//http\:\/\//g;
-	$url2 =~ s/http\:\//http\:\/\//g;
-
-	$url11 =~ s/\/http\:\/\//\/http\:\//g;
-	$url2 =~ s/\/http\:\/\//\/http\:\//g;
-
 	$url11 =~ s/\?$//g;
-	$url2 =~ s/\?$//g;
 
 	$url11 =~ s/\/\.$//;
-	$url2 =~ s/\/\.$//;
+
 	insert_to_url($url11);
 	if($url2 ne $url11)
 	{
 		insert_to_url($url2);
 	}
-	make_special_chars($url11,$url1->as_iri(), 0) if($make_sp_chars eq "true");
+	if($as_str ne $url2 || $as_str ne $url11)
+	{
+		my $last_char_1 = substr($url11, -1);
+		my $last_char_2 = substr($as_str, -1);
+		if($last_char_1 eq $last_char_2)
+		{
+			insert_to_url($as_str);
+		}
+	}
+	make_special_chars($url11, $url1->as_iri(), 0) if($make_sp_chars eq "true");
 }
 $sth->finish();
 
@@ -272,6 +272,8 @@ if($n)
 	print $PROTOS_FILE "\@SSL\n";
 }
 
+ips_to_hosts() if($ips_to_hosts eq "true");
+nets_to_hosts() if($nets_to_hosts eq "true");
 
 close $DOMAINS_FILE;
 close $URLS_FILE;
@@ -288,7 +290,7 @@ my $ssl_host_file_hash=get_md5_sum($ssls_file);
 
 if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
 {
-	system("/bin/systemctl", "reload-or-restart","extfilter");
+	system("/bin/systemctl", "reload-or-restart", "extfilter");
 	if($? != 0)
 	{
 		$logger->error("Can't reload or restart extfilter!");
@@ -484,3 +486,30 @@ sub treeFindDomain
 	return $r->{'.'} || 0;
 }
 
+sub ips_to_hosts
+{
+	my $sth = $dbh->prepare("SELECT ip FROM zap2_only_ips");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
+	{
+		my $ip = get_ip($ips->{ip});
+		if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
+		{
+			print $HOSTS_FILE "$ip", ", 6/0xfe", "\n";
+		} else {
+			print $HOSTS_FILE "[$ip]", ", 6/0xfe", "\n";
+		}
+	}
+	$sth->finish();
+}
+
+sub nets_to_hosts
+{
+	my $sth = $dbh->prepare("SELECT subnet FROM zap2_subnets");
+	$sth->execute;
+	while (my $ips = $sth->fetchrow_hashref())
+	{
+		print $HOSTS_FILE "$ips->{subnet}", ", 6/0xfe", "\n";
+	}
+	$sth->finish();
+}
