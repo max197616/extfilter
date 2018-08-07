@@ -693,7 +693,7 @@ void extFilter::initialize(Application& self)
 	if(!cli_address.empty() && _cmdline_port)
 		_cmdline_ip = Poco::Net::IPAddress::parse(cli_address);
 
-
+  
 	int _mem_channels = config().getInt("memory_channels", 2);
 	
 	int coreMaskToUse = config().getInt("core_mask", 0);

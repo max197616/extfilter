@@ -133,6 +133,7 @@ bool WorkerThread::checkURLBlocked(const char *host, size_t host_len, const char
 	char *redir_url = nullptr;
 	if((redir_size = extFilter::instance()->getTriesManager()->checkURLBlocked(getWorkerID(), host, host_len, uri, uri_len, &redir_url)) != 0)
 	{
+
 		struct tcphdr *tcph = (struct tcphdr *)((uint8_t *) pkt->pkt + (pkt->ip_version == 4 ? sizeof(struct ipv4_hdr) : sizeof(struct ipv6_hdr)));
 		if(likely(redir_url != nullptr))
 		{
