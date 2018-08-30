@@ -87,7 +87,7 @@ TriesControl::TriesControl():
 }
 
 
-int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *urls, bool is_domains = false)
+int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *urls, bool with_slashes = false)
 {
 	int lines = 0;
 	std::string line;
@@ -96,29 +96,22 @@ int read_keys(std::istream &input, marisa::Keyset *m_domains, marisa::Keyset *ur
 		lines++;
 		if(line[0] == '#' || line[0] == ';')
 			continue;
-		if(is_domains)
+		std::size_t pos = line.find("*.");
+		if(pos != line.npos)
 		{
-			std::size_t pos = line.find("*.");
-			if(pos != line.npos)
-			{
-				std::string s = line.substr(pos+1, line.length()-1);
-				std::string s1(s.c_str()+1);
+			std::string s = line.substr(pos+1, line.length()-1);
+			std::string s1(s.c_str()+1);
+			if(with_slashes)
 				s1 += "/";
-				urls->push_back(s1.c_str(), s1.length()); // store domain without previous dot
-				std::reverse(s.begin(), s.end());
-				m_domains->push_back(s.c_str(), s.length()); // store reverse
-			} else {
-				if(is_domains)
-				{
-					std::string s(line.c_str());
-					s += "/";
-					urls->push_back(s.c_str(), s.length());
-				}
-			}
+			urls->push_back(s1.c_str(), s1.length()); // store domain without previous dot
+			std::reverse(s.begin(), s.end());
+			m_domains->push_back(s.c_str(), s.length()); // store reverse
 		} else {
-			urls->push_back(line.c_str(), line.length());
+			std::string s(line.c_str());
+			if(with_slashes)
+				s += "/";
+			urls->push_back(s.c_str(), s.length());
 		}
-
 	}
 	return lines;
 }
@@ -340,19 +333,19 @@ int TriesManager::checkSNIBlocked(int thread_id, const char *sni, uint32_t sni_l
 
 void BlacklistsManager::fillRedirURL(uint8_t profile, const char *redir_url, size_t url_length)
 {
-		_sp[profile].redir_url_size = url_length;
-		if(!memcmp(redir_url, "http://", 7) || !memcmp(redir_url, "https://", 8))
-		{
-			strncpy(_sp[profile].redir_url, redir_url, sizeof(_sp[profile].redir_url)-1);
-		} else {
-			strncpy(stpcpy(_sp[profile].redir_url, "http://"), redir_url, sizeof(_sp[profile].redir_url)-1-7);
-			_sp[profile].redir_url_size += 7;
-		}
-		_sp[profile].need_add_url = false;
-		if(redir_url[url_length-1] == '?' || redir_url[url_length-1] == '&')
-			_sp[profile].need_add_url = true;
-		if(_sp[profile].redir_url_size > sizeof(_sp[profile].redir_url)-1)
-			_sp[profile].redir_url_size = sizeof(_sp[profile].redir_url)-1;
+	_sp[profile].redir_url_size = url_length;
+	if(!memcmp(redir_url, "http://", 7) || !memcmp(redir_url, "https://", 8))
+	{
+		strncpy(_sp[profile].redir_url, redir_url, sizeof(_sp[profile].redir_url)-1);
+	} else {
+		strncpy(stpcpy(_sp[profile].redir_url, "http://"), redir_url, sizeof(_sp[profile].redir_url)-1-7);
+		_sp[profile].redir_url_size += 7;
+	}
+	_sp[profile].need_add_url = false;
+	if(redir_url[url_length-1] == '?' || redir_url[url_length-1] == '&')
+		_sp[profile].need_add_url = true;
+	if(_sp[profile].redir_url_size > sizeof(_sp[profile].redir_url)-1)
+		_sp[profile].redir_url_size = sizeof(_sp[profile].redir_url)-1;
 }
 
 void BlacklistsManager::fillProfile(uint8_t profile, std::string &_domains_file, std::string &_urls_file, std::string &_sni_file, const char *redir_url, size_t url_length)
