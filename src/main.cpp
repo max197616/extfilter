@@ -1129,14 +1129,16 @@ int extFilter::main(const ArgVec& args)
 					logger().fatal("Unable to allocate mempool for sender: %d", (int) rte_errno);
 					return Poco::Util::Application::EXIT_CONFIG;
 				}
-				n = global_prm->answer_duplication * global_prm->workers_number;
-				n = 1024;
-				logger().information("Set number of entries of the clone buffer to %u", n);
-				clone_pool = rte_pktmbuf_pool_create("clone_pool", n, MBUF_CACHE_SIZE, 0, 0, rte_socket_id());
-				if(clone_pool == nullptr)
+				if(global_prm->answer_duplication)
 				{
-					logger().fatal("Unable to allocate mempool for clone buffer");
-					return Poco::Util::Application::EXIT_CONFIG;
+					n = global_prm->answer_duplication * global_prm->workers_number * 1024;
+					logger().information("Set number of entries of the clone buffer to %u", n);
+					clone_pool = rte_pktmbuf_pool_create("clone_pool", n, MBUF_CACHE_SIZE, 0, 0, rte_socket_id());
+					if(clone_pool == nullptr)
+					{
+						logger().fatal("Unable to allocate mempool for clone buffer");
+						return Poco::Util::Application::EXIT_CONFIG;
+					}
 				}
 			} else {
 				if(initPort(portid, &ports_eth_addr[portid]) != 0)
