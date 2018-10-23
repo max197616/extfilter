@@ -65,6 +65,8 @@ int on_header_complete_ext(http_parser* p, dpi_pkt_infos_t* pkt_informations, vo
 		WorkerThread *obj = (WorkerThread *) user_data;
 		struct http::http_req_buf *d = (struct http::http_req_buf *) *flow_specific_user_data;
 		obj->setNeedBlock(obj->checkURLBlocked(d->host_r.buf, d->host_r.length, d->uri.buf, d->uri.length, pkt_informations));
+		d->uri.length = 0;
+		d->host_r.length = 0;
 	}
 	return 1; // no need to check body...
 }

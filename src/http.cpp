@@ -80,6 +80,7 @@ int on_header_field_ext(http_parser *p, const char *at, size_t length, dpi_pkt_i
 					}
 					if((d->h_prev_char == 's' || d->h_prev_char == 'S') && (at[z] == 't' || at[z] == 'T'))
 					{
+						d->host_r.length = 0;
 						break;
 					}
 					d->h_state = hstate_nothing;
