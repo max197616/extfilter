@@ -64,6 +64,7 @@ my %already_out;
 my $domains_file_hash_old=get_md5_sum($domains_file);
 my $urls_file_hash_old=get_md5_sum($urls_file);
 my $ssl_host_file_hash_old=get_md5_sum($ssls_file);
+my $hosts_file_hash_old=get_md5_sum($hosts_file);
 
 open (my $DOMAINS_FILE, ">",$domains_file) or die "Could not open DOMAINS '$domains_file' file: $!";
 open (my $URLS_FILE, ">",$urls_file) or die "Could not open URLS '$urls_file' file: $!";
@@ -287,8 +288,9 @@ $dbh->disconnect();
 my $domains_file_hash=get_md5_sum($domains_file);
 my $urls_file_hash=get_md5_sum($urls_file);
 my $ssl_host_file_hash=get_md5_sum($ssls_file);
+my $hosts_file_hash=get_md5_sum($hosts_file);
 
-if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old)
+if($domains_file_hash ne $domains_file_hash_old || $urls_file_hash ne $urls_file_hash_old || $ssl_host_file_hash ne $ssl_host_file_hash_old || $hosts_file_hash ne $hosts_file_hash_old)
 {
 	system("/bin/systemctl", "reload-or-restart", "extfilter");
 	if($? != 0)
