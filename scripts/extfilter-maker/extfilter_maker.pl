@@ -15,6 +15,7 @@ use Digest::MD5 qw (md5);
 use Log::Log4perl;
 use Net::IP qw(:PROC);
 use Encode;
+use Net::CIDR::Lite;
 
 binmode(STDOUT,':utf8');
 binmode(STDERR,':utf8');
@@ -490,6 +491,8 @@ sub treeFindDomain
 
 sub ips_to_hosts
 {
+	my $ip_cidr = new Net::CIDR::Lite;
+	my $ip6_cidr = new Net::CIDR::Lite;
 	my $sth = $dbh->prepare("SELECT ip FROM zap2_only_ips");
 	$sth->execute;
 	while (my $ips = $sth->fetchrow_hashref())
@@ -497,12 +500,21 @@ sub ips_to_hosts
 		my $ip = get_ip($ips->{ip});
 		if($ip =~ /^(\d{1,3}\.){3}\d{1,3}$/)
 		{
-			print $HOSTS_FILE "$ip", ", 6/0xfe", "\n";
+			$ip_cidr->add_any($ip);
 		} else {
-			print $HOSTS_FILE "[$ip]", ", 6/0xfe", "\n";
+			$ip6_cidr->add_any($ip);
 		}
 	}
 	$sth->finish();
+	foreach my $ip (@{$ip_cidr->list()})
+	{
+		print $HOSTS_FILE "$ip", ", 6/0xfe", "\n";
+	}
+	foreach my $ip6 (@{$ip6_cidr->list()})
+	{
+		print $HOSTS_FILE "[$ip6]", ", 6/0xfe", "\n";
+	}
+	
 }
 
 sub nets_to_hosts
