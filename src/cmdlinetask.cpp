@@ -724,12 +724,12 @@ static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void*
 			cmdline_printf(cl,"Searching for SNI: %s\n", res->value);
 			if(extFilter::instance()->getTriesManager()->checkSNIBlocked(MAX_WORKER_THREADS-1, (const char *)&res->value, sni_len))
 			{
-				cmdline_printf(cl, "This SNI is listed\n\n");
+				cmdline_printf(cl, "This SNI is listed\n");
 				marisa::Agent& agent = extFilter::instance()->getTriesManager()->getAgent(MAX_WORKER_THREADS-1);
 				const marisa::Key& key = agent.key();
 				std::string in_db(key.ptr(), key.length());
 				cmdline_printf(cl, "Record id in db: %lu\n", key.id());
-				cmdline_printf(cl, "Record in db: %s\n", in_db.c_str());
+				cmdline_printf(cl, "Record in db: %s\n\n", in_db.c_str());
 			} else {
 				cmdline_printf(cl, "This SNI is not listed\n\n");
 			}
@@ -738,7 +738,7 @@ static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void*
 			std::string uri(res->value);
 			if(uri.find("http://") != std::string::npos)
 			{
-				uri.substr(0, 7);
+				uri.erase(0, 7);
 			}
 			std::string host;
 			std::string url;
@@ -754,14 +754,14 @@ static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void*
 			cmdline_printf(cl, "Searching for host: %s, url: %s\n", host.c_str(), url.c_str());
 			if(extFilter::instance()->getTriesManager()->checkURLBlocked(MAX_WORKER_THREADS-1, host.c_str(), host.length(), url.c_str(), url.length(), NULL))
 			{
-				cmdline_printf(cl, "This URL is listed");
+				cmdline_printf(cl, "This URL is listed\n");
 				marisa::Agent& agent = extFilter::instance()->getTriesManager()->getAgent(MAX_WORKER_THREADS-1);
 				const marisa::Key& key = agent.key();
 				std::string in_db(key.ptr(), key.length());
 				cmdline_printf(cl, "Record id in db: %lu\n", key.id());
-				cmdline_printf(cl, "Record in db: %s\n", in_db.c_str());
+				cmdline_printf(cl, "Record in db: %s\n\n", in_db.c_str());
 			} else {
-				cmdline_printf(cl, "This URL is not listed");
+				cmdline_printf(cl, "This URL is not listed\n\n");
 			}
 		}
 	}
