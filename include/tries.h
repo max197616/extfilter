@@ -145,6 +145,11 @@ public:
 	{
 		return &_bl_manager;
 	}
+
+	marisa::Agent &getAgent(int no)
+	{
+		return _agents[no];
+	}
 private:
 	BlacklistsManager _bl_manager;
 	marisa::Agent _agents[SEARCH_AGENTS];

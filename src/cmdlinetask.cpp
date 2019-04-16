@@ -361,6 +361,16 @@ struct cmd_showworker_result
 	cmdline_fixed_string_t option;
 };
 
+// show worker
+struct cmd_showfilter_result
+{
+	cmdline_fixed_string_t show;
+	cmdline_fixed_string_t filter;
+	cmdline_fixed_string_t what;
+	cmdline_fixed_string_t value;
+};
+
+
 extern "C" uint32_t ssl_max_packet_size;
 extern "C" uint64_t ssl_mallocs;
 extern "C" uint64_t ssl_reallocs;
@@ -703,11 +713,61 @@ static void cmd_showworker_parsed(void* parsed_result, struct cmdline* cl, void*
 	}
 }
 
+static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void* data)
+{
+	struct cmd_showfilter_result* res = (struct cmd_showfilter_result*)parsed_result;
+	if (!strcmp(res->show, "show"))
+	{
+		if (!strcmp(res->what, "sni"))
+		{
+			std::size_t sni_len = strlen(res->value);
+			cmdline_printf(cl,"Searching for SNI: %s\n", res->value);
+			if(extFilter::instance()->getTriesManager()->checkSNIBlocked(MAX_WORKER_THREADS-1, (const char *)&res->value, sni_len))
+			{
+				cmdline_printf(cl, "This SNI is listed\n\n");
+			} else {
+				cmdline_printf(cl, "This SNI is not listed\n\n");
+			}
+		} else if (!strcmp(res->what, "url"))
+		{
+			std::string uri(res->value);
+			if(uri.find("http://") != std::string::npos)
+			{
+				uri.substr(0, 7);
+			}
+			std::string host;
+			std::string url;
+			std::size_t found = uri.find("/");
+			if(found != std::string::npos)
+			{
+				host = uri.substr(0, found);
+				url = uri.substr(found + 1);
+			} else {
+				host = uri;
+				url.assign("/");
+			}
+			cmdline_printf(cl, "Searching for host: %s, url: %s\n", host.c_str(), url.c_str());
+			if(extFilter::instance()->getTriesManager()->checkURLBlocked(MAX_WORKER_THREADS-1, host.c_str(), host.length(), url.c_str(), url.length(), NULL))
+			{
+				cmdline_printf(cl, "This URL is listed");
+				marisa::Agent& agent = extFilter::instance()->getTriesManager()->getAgent(MAX_WORKER_THREADS-1);
+				const marisa::Key& key = agent.key();
+				std::string in_db(key.ptr(), key.length());
+				cmdline_printf(cl, "Record id in db: %lu\n", key.id());
+				cmdline_printf(cl, "Record in db: %s\n", in_db.c_str());
+			} else {
+				cmdline_printf(cl, "This URL is not listed");
+			}
+		}
+	}
+}
+
 cmdline_parse_token_string_t cmd_showworker_show = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, show, "show#clear");
 cmdline_parse_token_string_t cmd_showworker_worker = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, worker, "worker");
 cmdline_parse_token_string_t cmd_showworker_what = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, what, "stats#memory");
 cmdline_parse_token_string_t cmd_showworker_workernum = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, workernum, NULL);
 cmdline_parse_token_string_t cmd_showworker_option = TOKEN_STRING_INITIALIZER(struct cmd_showworker_result, option, "-j#json");
+
 
 static cmdline_parse_inst_t * init_cmd_showworker_json()
 {
@@ -736,8 +796,29 @@ static cmdline_parse_inst_t * init_cmd_showworker()
 	cmd_showport->tokens[1] = &cmd_showworker_worker.hdr;
 	cmd_showport->tokens[2] = &cmd_showworker_what.hdr;
 	cmd_showport->tokens[3] = &cmd_showworker_workernum.hdr;
-	cmd_showport->tokens[5] = nullptr;
+	cmd_showport->tokens[4] = nullptr;
 	return cmd_showport;
+}
+
+cmdline_parse_token_string_t cmd_showfilter_show = TOKEN_STRING_INITIALIZER(struct cmd_showfilter_result, show, "show");
+cmdline_parse_token_string_t cmd_showfilter_filter = TOKEN_STRING_INITIALIZER(struct cmd_showfilter_result, filter, "filter");
+cmdline_parse_token_string_t cmd_showfilter_what = TOKEN_STRING_INITIALIZER(struct cmd_showfilter_result, what, "sni#url");
+cmdline_parse_token_string_t cmd_showfilter_value = TOKEN_STRING_INITIALIZER(struct cmd_showfilter_result, value, NULL);
+
+static cmdline_parse_inst_t *init_cmd_show_filter()
+{
+	static cmdline_parse_inst_t *cmd_showfilter = NULL;
+	cmd_showfilter = (cmdline_parse_inst_t *)calloc(1, sizeof(cmdline_parse_inst_t) + sizeof(void *) * 5);
+	cmd_showfilter->f = cmd_showfilter_parsed;
+	cmd_showfilter->data = nullptr;
+	cmd_showfilter->help_str = "show filter sni|url URL";
+	cmd_showfilter->tokens[0] = &cmd_showfilter_show.hdr;
+	cmd_showfilter->tokens[1] = &cmd_showfilter_filter.hdr;
+	cmd_showfilter->tokens[2] = &cmd_showfilter_what.hdr;
+	cmd_showfilter->tokens[3] = &cmd_showfilter_value.hdr;
+	cmd_showfilter->tokens[4] = nullptr;
+	return cmd_showfilter;
+
 }
 
 // end show worker
@@ -960,6 +1041,7 @@ CmdLineTask::CmdLineTask(int port, Poco::Net::IPAddress &ip):
 	cmds.push_back(init_cmd_notify());
 	cmds.push_back(init_cmd_acl());
 	cmds.push_back(init_cmd_show_acl());
+	cmds.push_back(init_cmd_show_filter());
 	build_ctx();
 }
 

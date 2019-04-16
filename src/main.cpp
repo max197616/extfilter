@@ -846,7 +846,7 @@ void extFilter::initialize(Application& self)
 			throw Poco::Exception("Congfiguration error");
 		}
 		Poco::StringTokenizer restTokenizer(p, ";");
-		if(restTokenizer.count() > MAX_WORKER_THREADS)
+		if(restTokenizer.count() > MAX_WORKER_THREADS - 1)
 		{
 			logger().fatal("Exceeded max number of worker threads: %z", restTokenizer.count());
 			throw Poco::Exception("Configuration error");

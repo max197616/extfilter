@@ -58,7 +58,7 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 	acl_param.name = name;
 	acl_param.socket_id = socketid;
 	acl_param.rule_size = RTE_ACL_RULE_SZ(dim);
-	acl_param.max_rule_num = MAX_ACL_RULE_NUM;
+	acl_param.max_rule_num = acl_num;
 
 	if ((context = rte_acl_create(&acl_param)) == NULL)
 	{
