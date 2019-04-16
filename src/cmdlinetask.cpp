@@ -725,6 +725,11 @@ static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void*
 			if(extFilter::instance()->getTriesManager()->checkSNIBlocked(MAX_WORKER_THREADS-1, (const char *)&res->value, sni_len))
 			{
 				cmdline_printf(cl, "This SNI is listed\n\n");
+				marisa::Agent& agent = extFilter::instance()->getTriesManager()->getAgent(MAX_WORKER_THREADS-1);
+				const marisa::Key& key = agent.key();
+				std::string in_db(key.ptr(), key.length());
+				cmdline_printf(cl, "Record id in db: %lu\n", key.id());
+				cmdline_printf(cl, "Record in db: %s\n", in_db.c_str());
 			} else {
 				cmdline_printf(cl, "This SNI is not listed\n\n");
 			}
