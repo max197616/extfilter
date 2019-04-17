@@ -746,7 +746,7 @@ static void cmd_showfilter_parsed(void* parsed_result, struct cmdline* cl, void*
 			if(found != std::string::npos)
 			{
 				host = uri.substr(0, found);
-				url = uri.substr(found + 1);
+				url = uri.substr(found);
 			} else {
 				host = uri;
 				url.assign("/");
