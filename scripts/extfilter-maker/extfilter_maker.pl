@@ -235,6 +235,15 @@ while (my $ips = $sth->fetchrow_hashref())
 	$url11 =~ s/\/\.$//;
 
 	insert_to_url($url11);
+
+	if($url2 =~ /\%28/ || $url2 =~ /\%29/)
+	{
+		my $n_url = $url11;
+		$n_url =~ s/\(/\%28/g;
+		$n_url =~ s/\)/\%29/g;
+		insert_to_url($n_url);
+	}
+
 	if($url2 ne $url11)
 	{
 		insert_to_url($url2);
