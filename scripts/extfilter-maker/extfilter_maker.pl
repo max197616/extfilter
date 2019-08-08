@@ -148,7 +148,10 @@ while (my $ips = $sth->fetchrow_hashref())
 		$url2 = substr($url2, 0, $idx);
 	}
 	# delete fragment
-	$url2 =~ s/^(.*)\#(.*)$/$1/;
+	if((my $idx = index($url2, "#")) != -1)
+	{
+		$url2 = substr($url2, 0, $idx);
+	}
 
 	my $url1=new URI($url2);
 	my $scheme=$url1->scheme();
