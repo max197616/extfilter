@@ -66,6 +66,8 @@ my $bgp6_neighbor = $Config->{'BGP.neighbor6'} || "";
 my $vtysh = $Config->{'BGP.vtysh'} || "/bin/vtysh";
 my $route_to_null = (lc($Config->{'BGP.route_to_null'} || "true")) eq "true" ? 1 : 0;
 my $do_subnets = (lc($Config->{'BGP.do_subnets'} || "true")) eq "true" ? 1 : 0;
+my $ipv4_agg_prefix = $Config->{'BGP.ipv4_aggregate_prefix'} || "32";
+$ipv4_agg_prefix = "/".$ipv4_agg_prefix if(index($ipv4_agg_prefix, "/") == -1);
 
 my $update_soft_quagga=1;
 
@@ -124,8 +126,8 @@ while (my $ips = $sth->fetchrow_hashref())
 	next if($ip eq "0.0.0.0" || $ip eq "0000:0000:0000:0000:0000:0000:0000:0000");
 	if($ip =~ /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
 	{
-		$ip_cidr_null->add_any($ip) if($route_to_null);
-		$ip_cidr->add_any($ip);
+		$ip_cidr_null->add_any($ip.$ipv4_agg_prefix) if($route_to_null);
+		$ip_cidr->add_any($ip.$ipv4_agg_prefix);
 	} else
 	{
 		$ip6_cidr_null->add_any($ip) if($route_to_null);
