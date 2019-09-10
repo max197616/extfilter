@@ -264,7 +264,7 @@ void ESender::sendPacket(void *ip_from, void *ip_to, int ip_ver, int port_from, 
 }
 
 
-void ESender::sendPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server)
+void ESender::sendPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, bool to_server)
 {
 	struct rte_mbuf *pkt = rte_pktmbuf_alloc(_mp);
 	if(unlikely(pkt == nullptr))
@@ -305,7 +305,7 @@ void ESender::sendPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32
 	return;
 }
 
-void ESender::sendPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server)
+void ESender::sendPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, bool to_server)
 {
 	struct rte_mbuf *pkt = rte_pktmbuf_alloc(_mp);
 	if(unlikely(pkt == nullptr))
@@ -403,19 +403,19 @@ void ESender::HTTPForbiddenIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uin
 }
 
 
-void ESender::SendRSTIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum)
+void ESender::SendRSTIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool use_ack)
 {
 	// send rst to the client
-	sendPacketIPv4(pkt_infos, acknum, seqnum, nullptr, 0, true, false);
+	sendPacketIPv4(pkt_infos, acknum, seqnum, nullptr, 0, use_ack ? 3 : 1, false);
 	// send rst to the server
 	if(_parameters.send_rst_to_server)
 		sendPacketIPv4(pkt_infos, seqnum, acknum, nullptr, 0, true, false, true);
 }
 
-void ESender::SendRSTIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum)
+void ESender::SendRSTIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool use_ack)
 {
 	// send rst to the client
-	sendPacketIPv6(pkt_infos, acknum, seqnum, nullptr, 0, true, false);
+	sendPacketIPv6(pkt_infos, acknum, seqnum, nullptr, 0, use_ack ? 3 : 1, false);
 	// send rst to the server
 	if(_parameters.send_rst_to_server)
 		sendPacketIPv6(pkt_infos, seqnum, acknum, nullptr, 0, true, false, true);

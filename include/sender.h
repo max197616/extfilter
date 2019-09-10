@@ -205,7 +205,7 @@ public:
 		return size;
 	}
 
-	inline int makeSwapPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, struct rte_mbuf *m, bool to_server = false)
+	inline int makeSwapPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, struct rte_mbuf *m, bool to_server = false)
 	{
 		int pkt_len;
 		const uint8_t *pkt = pkt_infos->pkt;
@@ -279,8 +279,15 @@ public:
 		tcph->psh = f_psh;
 		if(f_reset)
 		{
-			tcph->ack = 0;
-			tcph->ack_seq = 0;
+			if(f_reset & 2)
+			{
+				tcph->ack = 1;
+				tcph->ack_seq = seqnum;
+			} else {
+				tcph->ack = 0;
+				tcph->ack_seq = 0;
+			}
+
 			tcph->fin = 0;
 			tcph->window = 0;
 		} else {
@@ -299,7 +306,7 @@ public:
 		return pkt_len;
 	}
 
-	inline int makeSwapPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, struct rte_mbuf *m, bool to_server = false)
+	inline int makeSwapPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, struct rte_mbuf *m, bool to_server = false)
 	{
 		int pkt_len;
 
@@ -372,8 +379,14 @@ public:
 		tcph->window = tcph_orig->window;
 		if(f_reset)
 		{
-			tcph->ack = 0;
-			tcph->ack_seq = 0;
+			if(f_reset & 2)
+			{
+				tcph->ack = 1;
+				tcph->ack_seq = seqnum;
+			} else {
+				tcph->ack = 0;
+				tcph->ack_seq = 0;
+			}
 			tcph->fin = 0;
 		} else {
 			tcph->ack_seq = seqnum;
@@ -387,14 +400,14 @@ public:
 		return pkt_len;
 	}
 
-	void sendPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server = false);
-	void SendRSTIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum);
+	void sendPacketIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, bool to_server = false);
+	void SendRSTIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool use_ack = false);
 	void HTTPRedirectIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool f_psh, const char *redir_url, size_t r_len);
 	void HTTPForbiddenIPv4(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool f_psh);
 
-	void sendPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, bool f_reset, bool f_psh, bool to_server = false);
+	void sendPacketIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, const char *dt_buf, size_t dt_len, uint8_t f_reset, bool f_psh, bool to_server = false);
 	void HTTPRedirectIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool f_psh, const char *redir_url, size_t r_len);
-	void SendRSTIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum);
+	void SendRSTIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool use_ack = false);
 	void HTTPForbiddenIPv6(dpi_pkt_infos_t *pkt_infos, uint32_t acknum, uint32_t seqnum, bool f_psh);
 private:
 	uint8_t _port;

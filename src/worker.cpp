@@ -615,7 +615,7 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 	m_ThreadStats.analyzed_packets++;
 
 
-	if(unlikely(payload_len > 0 && acl_action == ACL::ACL_DROP))
+	if(unlikely(((tcph->syn == 1 && tcph->ack == 0) || payload_len > 0) && acl_action == ACL::ACL_DROP))
 	{
 		m_ThreadStats.matched_ip_port++;
 		dpi_pkt_infos_t pkt_infos;
@@ -623,12 +623,12 @@ bool WorkerThread::analyzePacket(struct rte_mbuf* m, uint64_t timestamp)
 		pkt_infos.l2_pkt = rte_pktmbuf_mtod(m, const uint8_t *);
 		if(ip_version == 4)
 		{
-			_snd->SendRSTIPv4(&pkt_infos, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+			_snd->SendRSTIPv4(&pkt_infos, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq) + 1), (tcph->syn == 1 && tcph->ack == 0) ? true : false);
 			m_ThreadStats.sended_rst_ipv4++;
 		}
 		else
 		{
-			_snd->SendRSTIPv6(&pkt_infos, /*acknum*/ tcph->ack_seq, /*seqnum*/ tcph->seq);
+			_snd->SendRSTIPv6(&pkt_infos, /*acknum*/ tcph->ack_seq, /*seqnum*/ rte_cpu_to_be_32(rte_be_to_cpu_32(tcph->seq) + 1), (tcph->syn == 1 && tcph->ack == 0) ? true : false);
 			m_ThreadStats.sended_rst_ipv6++;
 		}
 		return true;

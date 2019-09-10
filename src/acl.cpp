@@ -138,7 +138,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 		std::string file_name=entry.first;
 		if(!file_name.empty())
 		{
-			_logger.debug("Building ACL from file %s", file_name);
+			_logger.information("Building ACL from file %s", file_name);
 			Poco::FileInputStream hf(file_name);
 			if(hf.good())
 			{
