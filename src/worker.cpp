@@ -724,7 +724,7 @@ bool WorkerThread::run(uint32_t coreId)
 	uint8_t sender_port = m_WorkerConfig.sender_port;
 	uint16_t tx_queue_id = m_WorkerConfig.tx_queue_id;
 
-	_logger.debug("Starting working thread on core %u", coreId);
+	poco_debug_f1(_logger, "Starting working thread on core %u", coreId);
 
 	for (int i = 0; i < qconf->n_rx_queue; i++)
 	{
@@ -843,6 +843,6 @@ bool WorkerThread::run(uint32_t coreId)
 			prev_timer_tsc = cur_tsc;
 		}
 	}
-	_logger.debug("Worker thread on core %u terminated", coreId);
+	poco_debug_f1(_logger, "Worker thread on core %u terminated", coreId);
 	return true;
 }

@@ -94,7 +94,8 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 		return NULL;
 	}
 
-	rte_acl_dump(context);
+
+//	rte_acl_dump(context); // debug
 	return context;
 }
 
@@ -126,8 +127,6 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 	unsigned int total_num_ipv6 = 0;
 	
 	uint32_t def_ipv6[4] = { 0, 0, 0, 0 };
-
-//	unsigned int acl_cnt = 0;
 
 	memset(&mapped[0], 0, sizeof(mapped));
 	std::vector<struct ACL::acl4_rule> acl4_rules;
@@ -295,46 +294,14 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 			hf.close();
 		}
 	}
-	if(!acl4_rules.empty())
-	{
-		_logger.information("Preparing %d rules for IPv4 ACL", (int) acl4_rules.size());
-		// allocate memory
-		ipv4_rules = (rte_acl_rule *)calloc(acl4_rules.size(), sizeof(struct ACL::acl4_rule));
-		if(ipv4_rules == nullptr)
-		{
-			_logger.error("Unable to get memory for ipv4 rules");
-			return -1;
-		}
 
-		int z = 0;
-		for(auto i=acl4_rules.begin(); i != acl4_rules.end(); i++)
-		{
-			rte_memcpy((uint8_t *)ipv4_rules+z*sizeof(struct ACL::acl4_rule), &(*i), sizeof(struct ACL::acl4_rule));
-			z++;
-		}
-	}
+	poco_information_f2(_logger, "Used %z bytes of memory for acl4 rules (%d entries)", sizeof(ACL::acl4_rule)*acl4_rules.capacity(), (int) acl4_rules.size());
+	poco_information_f2(_logger, "Used %z bytes of memory for acl6 rules (%d entries)", sizeof(ACL::acl6_rule)*acl6_rules.capacity(), (int) acl6_rules.size());
+	if(!acl4_rules.empty())
+		ipv4_rules = (rte_acl_rule *)acl4_rules.data();
 
 	if(!acl6_rules.empty())
-	{
-		_logger.information("Preparing %d rules for IPv6 ACL", (int) acl6_rules.size());
-		// allocate memory
-		ipv6_rules = (rte_acl_rule *)calloc(acl6_rules.size(), sizeof(struct ACL::acl6_rule));
-		if(ipv6_rules == nullptr)
-		{
-			_logger.error("Unable to get memory for ipv6 rules");
-			free(ipv4_rules);
-			return -1;
-		}
-
-		int z = 0;
-		for(auto i=acl6_rules.begin(); i != acl6_rules.end(); i++)
-		{
-			rte_memcpy((uint8_t *)ipv6_rules+z*sizeof(struct ACL::acl6_rule), &(*i), sizeof(struct ACL::acl6_rule));
-			z++;
-		}
-	}
-
-
+		ipv6_rules = (rte_acl_rule *)acl6_rules.data();
 
 	if(!_numa_on)
 	{
@@ -349,8 +316,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 			if (socketid >= NB_SOCKETS)
 			{
 				_logger.error("Socket %d of core %d is out of range %d", socketid, (int) lcore_id, NB_SOCKETS);
-				free(ipv4_rules);
-				free(ipv6_rules);
+//				free(ipv4_rules);
+//				free(ipv6_rules);
 				return -1;
 			}
 			mapped[socketid] = 1;
@@ -385,8 +352,6 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 			}
 		}
 	}
-	free(ipv4_rules);
-	free(ipv6_rules);
 
 	int socketid, lcore_id;
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++)

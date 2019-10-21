@@ -106,7 +106,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 		{
 			case ssl_wp_header: if(data_length + state->parsed_len - pos <= 4)
 					{
-						if(data_length - pos + state->parsed_len > SSL_BUF_SIZE -1)
+						if(data_length - pos + state->parsed_len > sizeof(state->buf) -1)
 						{
 							return -1;
 						}
@@ -148,7 +148,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 //							state->wp = ssl_wp_pdu;
 						if(state->parsed_len > 0)
 						{
-							if(state->parsed_len > SSL_BUF_SIZE -1)
+							if(state->parsed_len > sizeof(state->buf) -1)
 							{
 								return -1;
 							}
@@ -164,7 +164,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 			case ssl_wp_handshake_hdr:
 						if(data_length - pos + state->parsed_len <= 8)
 						{
-							if(state->parsed_len - TLS_HEADER_LEN > SSL_BUF_SIZE - 1 || data_length - pos < 0 || state->parsed_len - TLS_HEADER_LEN + data_length - pos > SSL_BUF_SIZE - 1)
+							if(state->parsed_len - TLS_HEADER_LEN > (int)sizeof(state->buf) - 1  || data_length - pos < 0 || (state->parsed_len - TLS_HEADER_LEN + data_length - pos) > (int)sizeof(state->buf) - 1)
 							{
 								return -1;
 							}
@@ -205,7 +205,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 							} else {
 								state->wp = ssl_wp_begin_cmnname;
 							}
-							if(state->parsed_len - TLS_HEADER_LEN > SSL_BUF_SIZE - 1)
+							if(state->parsed_len - TLS_HEADER_LEN > (int)sizeof(state->buf) - 1)
 							{
 								return -1;
 							}
@@ -315,7 +315,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 						int z = state->cmnname_size + state->cmnname_pos - state->parsed_len;
 						if(z > i)
 						{
-							if(i < 0 || i + state->parse_cmnname > SSL_BUF_SIZE - 1)
+							if(i < 0 || i + state->parse_cmnname > (int)sizeof(state->buf) - 1)
 							{
 								return -1;
 							}
@@ -332,7 +332,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 							}
 							if(state->cmnname_size + state->cmnname_pos != state->parsed_len)
 							{
-								if(z + state->parse_cmnname > SSL_BUF_SIZE - 1)
+								if(z + state->parse_cmnname > (int)sizeof(state->buf) - 1)
 									return -1;
 								for(int l = 0; l < z; l++)
 									p_buf[state->parse_cmnname + l] = app_data[pos + l];
@@ -412,7 +412,7 @@ int parse_ssl(const unsigned char* app_data, uint32_t data_length, ssl_state *st
 						break;
 
 			case ssl_wp_ext_serv_name:
-						if(state->skip_size <= SSL_BUF_SIZE - 1)
+						if(state->skip_size <= sizeof(state->buf) - 1)
 						{
 							state->wp = ssl_wp_copy_sni;
 							state->cmnname_size = 0;
