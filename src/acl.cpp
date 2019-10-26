@@ -27,6 +27,34 @@
 struct rte_acl_ctx* ACL::ipv4_acx[NB_SOCKETS];
 struct rte_acl_ctx* ACL::ipv6_acx[NB_SOCKETS];
 
+void getMemory(
+    int* currRealMem, int* peakRealMem,
+    int* currVirtMem, int* peakVirtMem) {
+
+    // stores each word in status file
+    char buffer[1024] = "";
+
+    // linux file contains this-process info
+    FILE* file = fopen("/proc/self/status", "r");
+
+    // read the entire file
+    while (fscanf(file, " %1023s", buffer) == 1) {
+
+        if (strcmp(buffer, "VmRSS:") == 0) {
+            fscanf(file, " %d", currRealMem);
+        }
+        if (strcmp(buffer, "VmHWM:") == 0) {
+            fscanf(file, " %d", peakRealMem);
+        }
+        if (strcmp(buffer, "VmSize:") == 0) {
+            fscanf(file, " %d", currVirtMem);
+        }
+        if (strcmp(buffer, "VmPeak:") == 0) {
+            fscanf(file, " %d", peakVirtMem);
+        }
+    }
+    fclose(file);
+}
 
 ACL::ACL() :
 	_logger(Poco::Logger::get("ACL"))
@@ -132,6 +160,10 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 	std::vector<struct ACL::acl4_rule> acl4_rules;
 	std::vector<struct ACL::acl6_rule> acl6_rules;
 
+	int currRealMem = 0, peakRealMem = 0, currVirtMem = 0, peakVirtMem = 0;
+	getMemory(&currRealMem, &peakRealMem, &currVirtMem, &peakVirtMem);
+	poco_information_f4(_logger, "Memory usage before acl read: realmem %d peakrealmem: %d curVirtMem: %d peakVirtMem: %d", currRealMem, peakRealMem, currVirtMem, peakVirtMem);
+
 	for(auto const &entry: fns)
 	{
 		std::string file_name=entry.first;
@@ -231,36 +263,12 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 							struct ACL::acl4_rule rule;
 							rule.field[ACL::PROTO_FIELD_IPV4].value.u8 = proto;
 							rule.field[ACL::PROTO_FIELD_IPV4].mask_range.u8 = proto_mask;
-							if(entry.second == ACL::ACL_NOTIFY)
-							{
-								rule.field[ACL::DST_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
-								rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = 0;
-								rule.field[ACL::SRC_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
-								rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
-								
-							} else {
-								rule.field[ACL::SRC_FIELD_IPV4].value.u32 = IPv4(0, 0, 0, 0);
-								rule.field[ACL::SRC_FIELD_IPV4].mask_range.u32 = 0;
-								rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
-								rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
-							}
-							rule.field[ACL::SRCP_FIELD_IPV4].value.u16 = 0;
-							rule.field[ACL::SRCP_FIELD_IPV4].mask_range.u16 = 65535;
-							if(entry.second == ACL::ACL_NOTIFY)
-							{
-								rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = 80;
-								rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = 80;
-								
-							} else {
-								rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
-								rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
-							}
-							if(entry.second == ACL::ACL_NOTIFY)
-							{
-								rule.data.userdata = (group_id << 4) | entry.second;
-							} else {
-								rule.data.userdata = entry.second;
-							}
+							rule.field[ACL::DST_FIELD_IPV4].value.u32 = rte_be_to_cpu_32(*((uint32_t *)ip_addr.addr()));
+							rule.field[ACL::DST_FIELD_IPV4].mask_range.u32 = def_mask ? def_mask : 32;
+							rule.field[ACL::DSTP_FIELD_IPV4].value.u16 = port_s;
+							rule.field[ACL::DSTP_FIELD_IPV4].mask_range.u16 = port_e;
+							rule.data.userdata = entry.second;
+
 							rule.data.priority = RTE_ACL_MAX_PRIORITY - total_num;
 							rule.data.category_mask = 1;
 
@@ -271,11 +279,8 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 							struct ACL::acl6_rule rule;
 							rule.field[ACL::PROTO_FIELD_IPV6].value.u8 = proto;
 							rule.field[ACL::PROTO_FIELD_IPV6].mask_range.u8 = proto_mask;
-							_parse_ipv6((uint32_t *)&def_ipv6, rule.field + SRC1_FIELD_IPV6, 0);
 							_parse_ipv6((uint32_t *)ip_addr.addr(), rule.field + DST1_FIELD_IPV6, def_mask ? def_mask : 128);
 
-							rule.field[ACL::SRCP_FIELD_IPV6].value.u16 = 0;
-							rule.field[ACL::SRCP_FIELD_IPV6].mask_range.u16 = 65535;
 							rule.field[ACL::DSTP_FIELD_IPV6].value.u16 = port_s;
 							rule.field[ACL::DSTP_FIELD_IPV6].mask_range.u16 = port_e;
 
@@ -303,6 +308,9 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 	if(!acl6_rules.empty())
 		ipv6_rules = (rte_acl_rule *)acl6_rules.data();
 
+	getMemory(&currRealMem, &peakRealMem, &currVirtMem, &peakVirtMem);
+	poco_information_f4(_logger, "Memory usage after acl read: realmem %d peakrealmem: %d curVirtMem: %d peakVirtMem: %d", currRealMem, peakRealMem, currVirtMem, peakVirtMem);
+
 	if(!_numa_on)
 	{
 		mapped[0] = 1;
@@ -323,6 +331,9 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 			mapped[socketid] = 1;
 		}
 	}
+	getMemory(&currRealMem, &peakRealMem, &currVirtMem, &peakVirtMem);
+	poco_information_f4(_logger, "Memory usage bedore acl setup: realmem %d peakrealmem: %d curVirtMem: %d peakVirtMem: %d", currRealMem, peakRealMem, currVirtMem, peakVirtMem);
+
 	for (int i = 0; i < NB_SOCKETS; i++)
 	{
 		if(mapped[i])
@@ -352,6 +363,9 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 			}
 		}
 	}
+	getMemory(&currRealMem, &peakRealMem, &currVirtMem, &peakVirtMem);
+	poco_information_f4(_logger, "Memory usage after acl setup: realmem %d peakrealmem: %d curVirtMem: %d peakVirtMem: %d", currRealMem, peakRealMem, currVirtMem, peakVirtMem);
+
 
 	int socketid, lcore_id;
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++)
