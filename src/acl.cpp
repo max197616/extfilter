@@ -76,7 +76,7 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 	struct rte_acl_ctx* context;
 	int dim = ipv6 ? RTE_DIM(ipv6_defs) : RTE_DIM(ipv4_defs);
 	static uint32_t ctx_count[NB_SOCKETS] = {0};
-
+	
 	if (!acl_num)
 		return NULL;
 
@@ -123,7 +123,7 @@ rte_acl_ctx* ACL::_setup_acl(struct rte_acl_rule* acl_base, unsigned int acl_num
 	}
 
 
-//	rte_acl_dump(context); // debug
+	rte_acl_dump(context); // debug
 	return context;
 }
 
@@ -197,7 +197,7 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 							found = str.find(":");
 						}
 						uint8_t proto = IPPROTO_TCP;
-						uint8_t proto_mask = 0xff;
+						uint8_t proto_mask = 0xfe;
 						std::size_t found_comma = str.find(",");
 						if(found_comma != std::string::npos)
 						{
@@ -248,15 +248,18 @@ int ACL::initACL(std::map<std::string, int> &fns, int _numa_on, std::set<struct 
 								group_id = atoi(group_num.c_str());
 							}
 						}
-						if(found != std::string::npos)
+
+/*						if(found != std::string::npos)
 						{
 							port=str.substr(ipv6 ? found+2 : found+1, end_pos);
 							_logger.debug("IP is %s port %s", ip, port);
-							port_s=atoi(port.c_str());
-							port_e=port_s;
+							port_s = atoi(port.c_str());
+							port_e = port_s;
 						} else {
 							_logger.debug("IP %s without port", ip);
 						}
+*/
+
 						Poco::Net::IPAddress ip_addr(ip);
 						if(ip_addr.family() == Poco::Net::IPAddress::IPv4)
 						{

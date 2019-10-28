@@ -67,24 +67,17 @@ enum {
 
 enum {
 	PROTO_FIELD_IPV4,
-//	SRC_FIELD_IPV4,
 	DST_FIELD_IPV4,
-//	SRCP_FIELD_IPV4,
 	DSTP_FIELD_IPV4,
 	NUM_FIELDS_IPV4
 };
 
 enum {
 	PROTO_FIELD_IPV6,
-//	SRC1_FIELD_IPV6,
-//	SRC2_FIELD_IPV6,
-//	SRC3_FIELD_IPV6,
-//	SRC4_FIELD_IPV6,
 	DST1_FIELD_IPV6,
 	DST2_FIELD_IPV6,
 	DST3_FIELD_IPV6,
 	DST4_FIELD_IPV6,
-//	SRCP_FIELD_IPV6,
 	DSTP_FIELD_IPV6,
 	NUM_FIELDS_IPV6
 };
@@ -113,8 +106,8 @@ enum {
 		.input_index = 2,
 		.offset = sizeof(struct ipv4_hdr) -
 			offsetof(struct ipv4_hdr, next_proto_id) +
-			sizeof(uint16_t),
-	},
+			sizeof(uint16_t)
+	}
 	};
 
 	const struct rte_acl_field_def ipv6_defs[NUM_FIELDS_IPV6] = {
