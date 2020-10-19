@@ -259,15 +259,26 @@ int TriesManager::checkURLBlocked(int thread_id, const char *hostname, uint32_t 
 		rhost = &revhostname[sizeof(revhostname) - 1 - host_len];
 	}
 	// перевод hostname в маленькие буквы и копирование hostname в обратном порядке в revhostname
+	uint32_t revhost_len = 0;
 	char *rh = &revhostname[sizeof(revhostname)-2];
-	for(uint32_t i = 0; i < host_len; i++, rh--)
+	bool found_colon = false;
+	for(uint32_t i = 0; i < host_len; i++)
 	{
 		char v = hostname[i];
 		if( v >= 'A' && v <= 'Z')
 			v |= 0x20;
+		else if(v == ':')
+			found_colon = true;
 		url_buf[i] = v;
-		*rh = v;
+		if(!found_colon)
+		{
+			*rh = v;
+			revhost_len++;
+			rh--;
+		}
 	}
+	if(found_colon)
+		rhost = &revhostname[sizeof(revhostname) - 1 - revhost_len];
 	if(uri_len != 0)
 	{
 		for(uint32_t i = 0; i < uri_len; i++)
@@ -276,7 +287,7 @@ int TriesManager::checkURLBlocked(int thread_id, const char *hostname, uint32_t 
 	url_buf[buf_len] = 0;
 	try
 	{
-		if(_bl_manager.getHttpBlacklist()->getActiveTrie()->search_prefix(&_agents[thread_id], rhost, host_len, url_buf, buf_len))
+		if(_bl_manager.getHttpBlacklist()->getActiveTrie()->search_prefix(&_agents[thread_id], rhost, revhost_len, url_buf, buf_len))
 		{
 			struct BlacklistsManager::bl_service_profile *sp = _bl_manager.getActiveSP();
 			if(redir_url && sp->redir_url[0] != 0) // make redir url
